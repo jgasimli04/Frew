@@ -2,7 +2,8 @@ import BeehiveKit
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var model = AppModel()
+    @EnvironmentObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         NavigationSplitView {
@@ -34,6 +35,14 @@ struct ContentView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    openWindow(id: "stage")
+                } label: {
+                    Label("Stage", systemImage: "sparkles.tv")
+                }
+                .help("Open the AV stage — inspiration clips + the helix overlay")
+            }
             ToolbarItem(placement: .automatic) {
                 HStack(spacing: 6) {
                     if model.busy { ProgressView().controlSize(.small) }
@@ -171,11 +180,22 @@ private struct CompressionChip: View {
 }
 
 struct BeehiveApplication: App {
+    @StateObject private var model = AppModel()
+
     var body: some Scene {
         WindowGroup("Beehive") {
-            ContentView().preferredColorScheme(.dark)
+            ContentView()
+                .environmentObject(model)
+                .preferredColorScheme(.dark)
         }
         .defaultSize(width: 1180, height: 760)
+
+        Window("Stage", id: "stage") {
+            StageView()
+                .environmentObject(model)
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 1000, height: 640)
     }
 }
 

@@ -262,8 +262,14 @@ manifest `sections: BTreeMap<String, Section{offset,length}>`). The index is an
 
 - **(a)** Predictor order — zero-order hold (v1) vs helix-tangent extrapolation.
   Start v1; only escalate if the `τ` sweep shows hold wastes anchors.
-- **(b)** `D(t)` norm and per-channel normalization of `(A, I)` before combining
-  (units, §4.3).
+- **(b)** ~~`D(t)` norm and per-channel normalization of `(A, I)` before
+  combining (units, §4.3).~~ **RESOLVED 2026-07-10** (`ZINC_AMBIENT_FINDINGS.md`):
+  per-channel z-score, then a **two-rail rule** — event rail = state through the
+  Laplace high-pass `H(s)=s/(s+λ)` (exact ZOH discretization, λ tied to the
+  track's angular tempo, default `16·ω_bar(meta)` ≈ 2× true beat) fired at
+  `τ_e = 3·seed`; hard rail = absolute hold error at `τ_max = 6·seed`, keeping
+  the provable bound. Corpus: 18–21× sparsity, ambient decile ≤ 0.72%, bound
+  holds. λ's bpm-octave sensitivity stays OPEN (clamp candidate).
 - **(c)** Anchor coordinate precision — full f32 `(r,θ,z,a,i)` vs quantized. Affects
   index size (axis-1a metric); decide by measurement.
 - **(d)** Whether anchors align to bar boundaries (`beehive/loops.py`, one 2π loop
