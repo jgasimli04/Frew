@@ -65,7 +65,15 @@ public final class DeckEngine {
                   let l = bufs[0].mData?.assumingMemoryBound(to: Float.self),
                   let r = bufs[1].mData?.assumingMemoryBound(to: Float.self)
             else { return noErr }
-            bd_mixer_render(mx, l, r, Int32(frameCount))
+            // the C core renders at most 4096 frames per call; chunk so an
+            // oversized host request never leaves tail garbage in the buffer
+            var done = 0
+            let total = Int(frameCount)
+            while done < total {
+                let n = min(4096, total - done)
+                bd_mixer_render(mx, l + done, r + done, Int32(n))
+                done += n
+            }
             return noErr
         }
         engine.attach(node)
@@ -90,6 +98,12 @@ public final class DeckEngine {
 
     public func start() throws {
         if !engine.isRunning { try engine.start() }
+    }
+
+    /// Live engine diagnostics for the status line — silence must be visible.
+    public var isRunning: Bool { engine.isRunning }
+    public var outputDeviceRate: Double {
+        engine.outputNode.outputFormat(forBus: 0).sampleRate
     }
 
     // ---- loading -----------------------------------------------------------
