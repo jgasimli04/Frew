@@ -14,7 +14,17 @@ import SwiftUI
 /// correlation — no manual assignment (user decision, 2026-07-10).
 struct StageView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var decks: DeckSession
     @StateObject private var stage = StageController()
+
+    /// When a deck is on air its EQ band taps replace the offline envelopes
+    /// as the stage's signal source (T4 hand-off) — and if it's a `.bee`, the
+    /// overlay renders that deck's own helix, phase-locked to its playhead.
+    private var liveOn: Bool { decks.liveBands != nil }
+    private var liveBars: Double? {
+        guard let (r, i) = decks.liveStage, i < r.alpha.count else { return nil }
+        return r.alpha[i] / (2 * .pi)
+    }
 
     var body: some View {
         ZStack {
@@ -26,7 +36,17 @@ struct StageView: View {
             PlayerLayerView(player: stage.playerB)
                 .opacity(stage.frontIsA ? 0 : 1)
 
-            if let r = model.record {
+            if let (r, i) = decks.liveStage {
+                TimelineView(.animation) { _ in
+                    HelixOverlay(record: r,
+                                 frame: i,
+                                 env: nil,
+                                 liveBands: decks.liveBands,
+                                 liveDrop: decks.liveDrop,
+                                 playing: true)
+                }
+                .allowsHitTesting(false)
+            } else if let r = model.record {
                 TimelineView(.animation) { _ in
                     HelixOverlay(record: r,
                                  frame: model.safeCursor,
@@ -44,16 +64,28 @@ struct StageView: View {
         .animation(.easeInOut(duration: 0.8), value: stage.frontIsA)
         .overlay(alignment: .bottom) { controls }
         .onChange(of: model.safeCursor) { i in
-            guard let r = model.record, i < r.alpha.count else { return }
+            guard !liveOn, let r = model.record, i < r.alpha.count else { return }
             stage.sync(bars: r.alpha[i] / (2 * .pi))
         }
         .onChange(of: model.isPlaying) { playing in
+            guard !liveOn else { return }
             if let r = model.record { stage.setTempo(bpm: r.meta.bpm) }
             stage.setPlaying(playing)
         }
+        .onChange(of: liveBars) { bars in
+            if let b = bars { stage.sync(bars: b) }
+        }
+        .onChange(of: liveOn) { on in
+            if on {
+                let bpm = max(decks.deck[0].playing ? decks.deck[0].effBpm : 0,
+                              decks.deck[1].playing ? decks.deck[1].effBpm : 0)
+                if bpm > 0 { stage.setTempo(bpm: bpm) }
+            }
+            stage.setPlaying(on || model.isPlaying)
+        }
         .onAppear {
             if let r = model.record { stage.setTempo(bpm: r.meta.bpm) }
-            stage.setPlaying(model.isPlaying)
+            stage.setPlaying(liveOn || model.isPlaying)
         }
     }
 
@@ -94,6 +126,8 @@ private struct HelixOverlay: View {
     let record: HelixRecord
     let frame: Int
     let env: BandEnvelopes?
+    var liveBands: [Float]? = nil     // deck EQ taps, when a deck is on air
+    var liveDrop: Float? = nil
     let playing: Bool
 
     var body: some View {
@@ -102,8 +136,9 @@ private struct HelixOverlay: View {
             guard n > 0 else { return }
             let i = min(max(frame, 0), n - 1)
 
-            let bands = env?.values(at: i) ?? [0, 0, 0, 0, 0]
-            let drop = Double(env.map { $0.bassDrop[min(i, max($0.frames - 1, 0))] } ?? 0)
+            let bands = liveBands ?? env?.values(at: i) ?? [0, 0, 0, 0, 0]
+            let drop = liveDrop.map(Double.init)
+                ?? Double(env.map { $0.bassDrop[min(i, max($0.frames - 1, 0))] } ?? 0)
             let sub = Double(bands[0]), low = Double(bands[1])
             let hiMid = Double(bands[3]), hi = Double(bands[4])
 
