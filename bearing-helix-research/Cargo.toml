@@ -1,0 +1,19 @@
+[package]
+name = "bearing-helix-research"
+version = "0.1.0"
+edition = "2021"
+description = "Research crate: the beehive helix framework applied to rolling-element bearing vibration — a cycle-pool storage format whose own byte rate is the health monitor. Local reconstruction of the remote-session spec (original commit 6fe0551, unreachable container)."
+
+# Standalone workspace: this crate deliberately imports nothing from the audio
+# project. Ported formulas carry provenance comments instead.
+[workspace]
+
+[dependencies]
+# zstd is used ONLY for the raw-stream compression baseline the format must beat;
+# the format's own residual codec is hand-rolled (fold.rs) and dependency-free.
+zstd = "0.13"
+# inflate for CWRU .mat v5 miCOMPRESSED elements (io.rs); pure Rust.
+miniz_oxide = "0.8"
+
+[profile.release]
+debug = true

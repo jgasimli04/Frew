@@ -1,0 +1,13 @@
+[package]
+name = "beehive-kernel"
+version = "0.1.0"
+edition = "2021"
+description = "Demo 1: the loop-clocked, adaptive-time-step audio kernel (equal-energy ‖F‖ ticks)."
+
+# Constraint (STUDY_ROADMAP_ENGINE.md / prompt): engine deps limited to hound + rustfft.
+[dependencies]
+hound = "3.5"
+rustfft = "6"
+
+[profile.release]
+opt-level = 3

@@ -1,0 +1,26 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# rust
+beecore/target/
+kernel/target/
+
+# swift
+BeehiveMac/.build/
+
+# test/bench scratch outputs
+beecore/interop/.tmp/
+beecore/bench/.tmp/
+
+# exp5 listening pairs + token artifacts (hundreds of MB, regenerable:
+# experiments/exp5_neural_base.py). exp3's small per-track subdirs stay tracked.
+experiments/recon/*.wav
+experiments/recon/*.dac
+
+# local-session things, deliberately out of the project
+.quarantine/
+.claude/
+.DS_Store

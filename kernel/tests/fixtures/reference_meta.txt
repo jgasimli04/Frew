@@ -1,0 +1,16 @@
+sr=44100
+n_samples=882000
+n_frames=1719
+n_fft=2048
+hop=512
+B=4
+f_ref=440.0
+floor_db=-80.0
+energy_floor_ratio=0.01
+r0=1.0
+bpm=120.0
+omega_rad_per_frame=0.03647381947024884
+s_a=1.6061709714702055
+s_i=4.102273358842537
+h_total=1745.0506303890893
+mean_fmag=1.015154526113491
