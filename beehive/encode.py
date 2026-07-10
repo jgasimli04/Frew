@@ -26,7 +26,7 @@ dependency; `tests/test_engine.py` asserts they agree with the torch reference.
 
 import datetime as _dt
 import os
-
+import math
 import numpy as np
 
 from .audio import content_hash, load_audio
@@ -43,6 +43,10 @@ from .tempo import estimate_bpm
 EPS = 1e-10
 ENGINE_VERSION = "0.1.0"
 
+# --- TOPOLOGICAL CONSTANTS ---
+PHI = (1.0 + math.sqrt(5.0)) / 2.0 
+MAX_PERCEPTUAL_LATENCY_SEC = 0.020
+# -----------------------------
 
 def _curvature_torsion(omega, r0, h1, h2, h3):
     """Corrected Frenet kappa, tau for R(n)=(r0 cos wn, r0 sin wn, h(n)).
@@ -169,6 +173,22 @@ def encode_song(
     omega = 2.0 * np.pi * bpm / (60.0 * B)                     # rad / second
     omega_n = omega * hop / sr                                 # rad / frame
 
+    # --- POLYMERASE PROOFREADING BOUNDARY ---
+    hop_duration_sec = hop / sr
+    
+    # Calculate instantaneous state velocity
+    dA_dt = np.gradient(A) / hop_duration_sec
+    dI_dt = np.gradient(I) / hop_duration_sec
+    
+    # Track volatility is the combined standard deviation of the state velocity
+    # Explicit float() cast prevents np.float64 leakage into the JSON manifest
+    track_volatility = float(np.std(np.sqrt(dA_dt**2 + dI_dt**2)))
+    
+    # Bound to human perception and apply Golden Ratio constraint
+    drift_rate_est = max(track_volatility * MAX_PERCEPTUAL_LATENCY_SEC, 1e-6)
+    proofreading_tau = drift_rate_est * PHI
+    # ----------------------------------------
+
     # --- engagement: reserved schema (the "most rewatched" layer) ---
     engagement = np.zeros(len(A), dtype=np.float32)
 
@@ -199,6 +219,12 @@ def encode_song(
         "sigma": sigma,
         "floor_db": floor_db,
         "smooth_frames": smooth_frames,
+        
+        # --- INJECT PROOFREADING CONSTRAINTS ---
+        "drift_rate_est": float(drift_rate_est),
+        "proofreading_tau": float(proofreading_tau),
+        # ---------------------------------------
+
         "n_definition": "hop/frame index; angle alpha = omega_n * n, omega_n = omega*hop/sr",
         "state_definition": "A = loudness dB; I = spectral centroid in semitones above f_ref (energy-gated)",
         "force_weighting": {
@@ -212,7 +238,7 @@ def encode_song(
             "chroma->timbre is many-to-one (exp3): different timbres can share a hue",
             "bpm is a light autocorrelation estimate; half/double octave errors are common -- override with bpm=",
             "r0 constant: the radius law (completion = largest radius) is still open",
-            "record is uniform-density: ||F|| marks where to offload/highload, but adaptive variable-rate storage is not yet implemented",
+            "record is uniform-density: Polymerase predictive excision boundary (proofreading_tau) is calculated, awaiting Rust beecore implementation for variable-rate keyframing.",
         ],
         "engagement_schema": {
             "per_frame": "engagement[n] accumulates listener attention aligned to frame n",
