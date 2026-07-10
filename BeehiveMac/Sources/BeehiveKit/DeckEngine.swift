@@ -140,6 +140,8 @@ public final class DeckEngine {
                              Int64(left.count), bpm, 0)
             }
         }
+        // the FX beatgrid wants the beat in *source* samples
+        bd_deck_set_grid(decks[deck], bpm > 0 ? sr * 60.0 / bpm : 0, 0)
 
         var t = TrackInfo()
         t.name = url.deletingPathExtension().lastPathComponent
@@ -294,6 +296,47 @@ public final class DeckEngine {
     public func setFilter(_ deck: Int, _ knob: Float) { bd_deck_set_filter(decks[deck], knob) }
     public func setCrossfader(_ x: Float, curve: Int) { bd_mixer_set_crossfader(mixer, x, Int32(curve)) }
     public func setMaster(_ v: Float) { bd_mixer_set_master(mixer, v) }
+
+    // ---- beat FX (T5, θ-synced) ---------------------------------------------
+
+    /// The FX catalog — RMX-class effects re-derived on the θ math: DUCK,
+    /// ROLL and REVERSE are pure functions of the beat phase; ECHO's delay
+    /// time is the beat fraction (tape-style glide on changes); DRIVE is a
+    /// waveshaper. See `beedeck.h` for the DSP contract.
+    public enum FXType: Int32, CaseIterable {
+        case off = 0, echo, duck, roll, reverse, drive
+        public var label: String {
+            switch self {
+            case .off: "OFF"; case .echo: "ECHO"; case .duck: "DUCK"
+            case .roll: "ROLL"; case .reverse: "REV"; case .drive: "DRIVE"
+            }
+        }
+    }
+    /// Band routing for the FX bus over the 5-band isolator split
+    /// (LOW = sub+low, MID = mid, HI = himid+hi).
+    public enum FXTarget: Int32, CaseIterable {
+        case low = 0, mid, hi, all
+        public var label: String {
+            switch self { case .low: "LOW"; case .mid: "MID"; case .hi: "HI"; case .all: "ALL" }
+        }
+    }
+
+    public func setFX(_ deck: Int, type: FXType, target: FXTarget, on: Bool) {
+        bd_deck_set_fx(decks[deck], type.rawValue, target.rawValue, on)
+    }
+    public func setFXBeats(_ deck: Int, _ beats: Double) {
+        bd_deck_set_fx_beats(decks[deck], beats)
+    }
+    public func setFXAmount(_ deck: Int, _ a: Float) {
+        bd_deck_set_fx_amount(decks[deck], a)
+    }
+    /// Momentary "echo out" punch: hold to mute the deck into beat-spaced
+    /// decaying repeats; release brings the dry back while the tail rings out.
+    public func setFXRelease(_ deck: Int, _ held: Bool) {
+        bd_deck_set_fx_release(decks[deck], held)
+    }
+    /// Current FX cycle in output samples (what the echo tail is spaced by).
+    public func fxCycleSamples(_ deck: Int) -> Double { bd_deck_fx_cycle(decks[deck]) }
 
     /// Live post-EQ band envelopes — the stage's signal source when a deck is
     /// on air (T4: "the EQ sends the signal to the visuals", literally).

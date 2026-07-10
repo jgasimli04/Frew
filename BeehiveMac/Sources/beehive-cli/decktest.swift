@@ -218,6 +218,185 @@ func decktest() {
         bd_mixer_free(m); bd_deck_free(d)
     }
 
+    // ======================= beat FX (T5, θ-synced) =========================
+    let beat = sr * 60.0 / 120.0                    // 120 bpm → 22050 samples
+
+    /// |peak| positions above `thresh`, grouped so one tap = one peak.
+    func taps(_ x: [Float], thresh: Float, minGap: Int) -> [Int] {
+        var out: [Int] = []
+        var i = 0
+        while i < x.count {
+            if abs(x[i]) > thresh {
+                var best = i
+                for j in i..<min(i + minGap, x.count) where abs(x[j]) > abs(x[best]) { best = j }
+                out.append(best)
+                i = best + minGap
+            } else { i += 1 }
+        }
+        return out
+    }
+
+    // ---- 7. echo taps land on the θ grid — at native rate and varispeed ----
+    // DoD (BEEDECK_ROADMAP T5): "echo tail lands on the grid at any tempo".
+    // A single impulse through ECHO(1 beat) must repeat every beat_src/rate
+    // output samples; measured tap spacing error is the claim.
+    for rate in [1.0, 1.06] {
+        var track = [Float](repeating: 0, count: Int(6 * sr))
+        track[4410] = 1.0                            // past the play-in ramp
+        let (d, m, render) = rig(track)
+        bd_deck_set_grid(d, beat, 0)
+        bd_deck_set_fx(d, Int32(BD_FX_ECHO), Int32(BD_FXT_ALL), true)
+        bd_deck_set_fx_beats(d, 1)
+        bd_deck_set_fx_amount(d, 0.7)
+        if rate != 1.0 { bd_deck_set_rate(d, rate) }
+        let (L, _) = render(Int(4.5 * sr))
+        let expected = beat / rate
+        let t = taps(L, thresh: 0.02, minGap: 4000)
+        var spacings: [Double] = []
+        for k in 1..<t.count { spacings.append(Double(t[k] - t[k - 1])) }
+        let worstErr = spacings.map { abs($0 - expected) }.max() ?? .infinity
+        print(String(format: "  echo @rate %.2f: %d taps, spacing target %.1f, worst err %.1f samples (%.2f ms)",
+                     rate, t.count, expected, worstErr, worstErr / sr * 1000))
+        check(t.count >= 5, "echo rings ≥5 taps above -34 dB (rate \(rate))")
+        check(worstErr <= 5, "every echo tap lands on the grid within 5 samples ≈ 0.11 ms (rate \(rate))")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
+    // ---- 8. FX engage/bypass is click-free (DoD) ----------------------------
+    do {
+        let track = sine(440, seconds: 4.0)
+        let natural = Double(track.indices.dropFirst().map { abs(track[$0] - track[$0 - 1]) }.max()!)
+        let (d, m, render) = rig(track)
+        bd_deck_set_grid(d, beat, 0)
+        bd_deck_set_fx_amount(d, 0.7)
+        _ = render(Int(0.3 * sr))                    // settle
+        var worstStep = 0.0
+        for ty in [BD_FX_ECHO, BD_FX_DUCK, BD_FX_ROLL, BD_FX_REVERSE, BD_FX_DRIVE] {
+            bd_deck_set_fx(d, Int32(ty), Int32(BD_FXT_ALL), true)
+            let (a, _) = render(Int(0.6 * sr))
+            bd_deck_set_fx(d, Int32(ty), Int32(BD_FXT_ALL), false)
+            let (b, _) = render(Int(0.4 * sr))
+            for x in [a, b] {
+                let s = Double(x.indices.dropFirst().map { abs(x[$0] - x[$0 - 1]) }.max()!)
+                if s > worstStep { worstStep = s }
+            }
+        }
+        print(String(format: "  FX engage/bypass: worst step %.4f vs clean sine %.4f (×%.2f)",
+                     worstStep, natural, worstStep / natural))
+        check(worstStep < 2.5 * natural, "all five FX engage and bypass click-free (DoD)")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
+    // ---- 9. DUCK is the φ envelope: silent on the beat, unity off-beat ------
+    do {
+        let (d, m, render) = rig(sine(1000, seconds: 5.0))
+        bd_deck_set_grid(d, beat, 0)
+        bd_deck_set_fx(d, Int32(BD_FX_DUCK), Int32(BD_FXT_ALL), true)
+        bd_deck_set_fx_beats(d, 1)
+        bd_deck_set_fx_amount(d, 1.0)
+        let (L, _) = render(Int(4.0 * sr))
+        let w = Int(0.025 * sr)                      // ±25 ms windows
+        let clean = rms(sine(1000, seconds: 1.0)[0..<(2 * w)])
+        var beatDb = 0.0, offDb = 0.0, cnt = 0.0
+        for k in 3...5 {
+            let c = Int(Double(k) * beat), o = c + Int(beat / 2)
+            beatDb += db(rms(L[(c - w)..<(c + w)]) / clean)
+            offDb += db(rms(L[(o - w)..<(o + w)]) / clean)
+            cnt += 1
+        }
+        print(String(format: "  duck: %.1f dB on the beat · %+.2f dB off-beat (φ envelope)",
+                     beatDb / cnt, offDb / cnt))
+        check(beatDb / cnt < -15, "duck ≥15 dB down at φ=0")
+        check(abs(offDb / cnt) < 1.5, "duck transparent at φ=0.5 (<1.5 dB)")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
+    // ---- 10. REVERSE plays the previous θ-cycle backwards -------------------
+    do {
+        let n = Int(5 * sr)
+        let track = (0..<n).map { 0.8 * Float($0 % Int(beat)) / Float(beat) }  // rising saw per beat
+        let (d, m, render) = rig(track)
+        bd_deck_set_grid(d, beat, 0)
+        bd_deck_set_fx(d, Int32(BD_FX_REVERSE), Int32(BD_FXT_ALL), true)
+        bd_deck_set_fx_beats(d, 1)
+        let (L, _) = render(Int(4.0 * sr))
+        var falling = 0, total = 0
+        for k in 2...5 {                             // settled cycles
+            let s = Int(Double(k) * beat)
+            let q = Int(beat / 4)
+            let firstHalf = rms(L[(s + q / 2)..<(s + q + q / 2)])
+            let secondHalf = rms(L[(s + 2 * q + q / 2)..<(s + 3 * q + q / 2)])
+            total += 1
+            if firstHalf > secondHalf { falling += 1 }   // reversed saw: high → low
+        }
+        print("  reverse: \(falling)/\(total) cycles play high→low (input plays low→high)")
+        check(falling == total, "REVERSE inverts every θ cycle")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
+    // ---- 11. ROLL freezes the last θ-cycle (slip-style) ---------------------
+    do {
+        let base = sine(330, seconds: 6.0)
+        let loud = Int(2 * beat)                     // 2 beats at 0.8, then 0.1
+        let track = base.indices.map { base[$0] * ($0 < loud ? 1.6 : 0.2) }
+        let (d, m, render) = rig(track)
+        bd_deck_set_grid(d, beat, 0)
+        _ = render(Int(2.1 * Double(beat) / sr * sr))      // capture the loud cycle
+        bd_deck_set_fx(d, Int32(BD_FX_ROLL), Int32(BD_FXT_ALL), true)    // grab it
+        _ = render(Int(0.1 * sr))
+        let (rollOut, _) = render(Int(beat))
+        bd_deck_set_fx(d, Int32(BD_FX_ROLL), Int32(BD_FXT_ALL), false)   // let go
+        _ = render(Int(0.3 * sr))
+        let (dryOut, _) = render(Int(beat))
+        let rollRms = rms(rollOut[...]), dryRms = rms(dryOut[...])
+        print(String(format: "  roll: held rms %.3f (loud slice) vs released rms %.3f (quiet input)",
+                     rollRms, dryRms))
+        check(rollRms > 0.35, "ROLL keeps replaying the captured loud cycle")
+        check(dryRms < 0.12, "releasing ROLL falls back to the (quiet) live input")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
+    // ---- 12. RELEASE echo-out: dry mutes, repeats decay on the grid, dry returns
+    do {
+        let (d, m, render) = rig(sine(440, seconds: 8.0))
+        bd_deck_set_grid(d, beat, 0)
+        bd_deck_set_fx_beats(d, 0.5)                 // repeats every half beat
+        _ = render(Int(0.5 * sr))
+        let (pre, _) = render(Int(0.3 * sr))
+        bd_deck_set_fx_release(d, true)              // hold
+        _ = render(Int(0.05 * sr))                   // mute transition
+        let D = Int(beat / 2)
+        let (held, _) = render(4 * D)
+        var winDb: [Double] = []
+        for k in 0..<4 { winDb.append(db(rms(held[(k * D)..<((k + 1) * D)]))) }
+        bd_deck_set_fx_release(d, false)             // let go
+        _ = render(Int(0.4 * sr))
+        let (post, _) = render(Int(0.3 * sr))
+        let drop = winDb[3] - winDb[0]
+        let back = db(rms(post[...]) / rms(pre[...]))
+        print(String(format: "  release: repeat windows %@ dB → decay %.1f dB over 3 taps; dry back within %+.2f dB",
+                     winDb.map { String(format: "%.1f", $0) }.joined(separator: " / "), drop, back))
+        check(winDb[3] < winDb[0] - 8, "repeats decay ≥8 dB across 3 taps while held")
+        check(zip(winDb, winDb.dropFirst()).allSatisfy { $0 >= $1 - 0.5 }, "decay is monotonic")
+        check(abs(back) < 2.0, "dry returns within 2 dB after release")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
+    // ---- 13. DRIVE actually distorts (crest factor collapses) ---------------
+    do {
+        let (d, m, render) = rig(sine(220, seconds: 3.0))
+        bd_deck_set_grid(d, beat, 0)
+        bd_deck_set_fx(d, Int32(BD_FX_DRIVE), Int32(BD_FXT_ALL), true)
+        bd_deck_set_fx_amount(d, 1.0)
+        _ = render(Int(0.5 * sr))
+        let (L, _) = render(Int(0.5 * sr))
+        let peak = Double(L.map { abs($0) }.max()!)
+        let crest = peak / rms(L[...])
+        print(String(format: "  drive: crest factor %.3f (clean sine 1.414 → square 1.0)", crest))
+        check(crest < 1.15, "waveshaper squares the sine (crest < 1.15)")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
     print(failures == 0 ? "  all deck DSP checks passed" : "  \(failures) FAILURES")
     exit(failures == 0 ? 0 : 1)
 }

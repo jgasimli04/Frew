@@ -16,6 +16,18 @@
  *
  * Every deck also publishes post-EQ per-band peak envelopes — the live signal
  * source for the AV stage ("the EQ sends the signal to the visuals").
+ *
+ * Beat FX (BEEDECK_ROADMAP T5): one θ-synced effect slot per deck, inserted on
+ * the isolator band buses — the LR4 split doubles as the FX router (the
+ * RMX-style 3-band idea: LOW = bands 0-1, MID = band 2, HI = bands 3-4). All
+ * timing derives from the beatgrid: the FX cycle is beat_samples × beats
+ * (source domain), phase φ is computed from the playhead each frame, so loops,
+ * seeks and varispeed keep the effect phase-locked to what is audible. DUCK,
+ * ROLL and REVERSE are pure functions of φ over rings (no clock of their own);
+ * ECHO adds a feedback delay whose time glides tape-style when the beat
+ * fraction or rate moves; DRIVE is a waveshaper. The RELEASE flag is a
+ * momentary "echo out": while held the deck mutes and beat-spaced repeats
+ * decay; on release the dry returns and the tail rings out to silence.
  */
 #ifndef BEEDECK_H
 #define BEEDECK_H
@@ -28,6 +40,10 @@ extern "C" {
 #endif
 
 enum { BD_BANDS = 5, BD_HOT_CUES = 8 };
+
+/* Beat FX types and band targets (see the header comment). */
+enum { BD_FX_OFF = 0, BD_FX_ECHO, BD_FX_DUCK, BD_FX_ROLL, BD_FX_REVERSE, BD_FX_DRIVE };
+enum { BD_FXT_LOW = 0, BD_FXT_MID, BD_FXT_HI, BD_FXT_ALL };
 
 typedef struct BDDeck BDDeck;
 typedef struct BDMixer BDMixer;
@@ -78,6 +94,23 @@ void bd_deck_set_filter(BDDeck *d, float knob);
 
 /* Post-EQ per-band peak envelopes (release-smoothed, ~0..1). Safe any thread. */
 void bd_deck_band_levels(const BDDeck *d, float out[BD_BANDS]);
+
+/* ---- beat FX (θ-synced) ---- */
+
+/* The FX beatgrid: beat length in *source* samples (track domain, same unit
+ * as bd_deck_position) and the first beat's sample. 0 = no grid; the FX then
+ * free-runs on a 0.5 s cycle scaled by the beats parameter. */
+void bd_deck_set_grid(BDDeck *d, double beat_samples, double beat0_sample);
+/* Select effect + band target and switch it on/off (BD_FX_* / BD_FXT_*).
+ * All transitions are declick-smoothed; bypass leaves the dry path untouched. */
+void bd_deck_set_fx(BDDeck *d, int type, int target, bool on);
+void bd_deck_set_fx_beats(BDDeck *d, double beats);   /* cycle length, 1/16..8 beats */
+void bd_deck_set_fx_amount(BDDeck *d, float amount);  /* 0..1: feedback/depth/drive */
+/* Momentary "echo out": true while the control is held. Works with any (or
+ * no) effect selected — it grabs the deck's full post-EQ signal. */
+void bd_deck_set_fx_release(BDDeck *d, bool held);
+/* Current FX cycle length in output samples (after rate) — for UI/tests. */
+double bd_deck_fx_cycle(const BDDeck *d);
 
 /* ---- mixer ---- */
 

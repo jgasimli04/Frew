@@ -10,7 +10,9 @@ import UniformTypeIdentifiers
 /// Keyboard (deck A / deck B):
 ///   play Q / P · cue A / L · sync S / K · loop E / U · loop ÷2 W / Y ·
 ///   loop ×2 R / I · jump −4 Z / N · +4 X / M · hot cues 1234 / 7890
-///   (⇧ + hot cue clears) · crossfader ← → nudge, ↓ centre
+///   (⇧ + hot cue clears) · crossfader ← → nudge, ↓ centre ·
+///   FX on/off F / J · FX type T / O (⇧ = band target) · FX beats ÷2 ×2
+///   V B / , . · echo-out (hold) G / H
 @MainActor
 final class DeckSession: ObservableObject {
     let engine = DeckEngine()
@@ -38,6 +40,12 @@ final class DeckSession: ObservableObject {
         var sampleRate = 44_100.0
         var lengthSamples: Int64 = 0
         var isBee = false
+        var fxType: DeckEngine.FXType = .off
+        var fxTarget: DeckEngine.FXTarget = .all
+        var fxOn = false
+        var fxBeats = 1.0
+        var fxAmount: Float = 0.5
+        var fxHeld = false            // momentary echo-out
     }
 
     @Published var deck: [DeckUI] = [DeckUI(), DeckUI()]
@@ -194,6 +202,75 @@ final class DeckSession: ObservableObject {
     func setCurve(_ c: Int) { xfCurve = c; engine.setCrossfader(crossfader, curve: c) }
     func setMaster(_ v: Float) { master = v; engine.setMaster(v) }
 
+    // ---- beat FX (T5) ----
+    private func pushFX(_ d: Int) {
+        engine.setFX(d, type: deck[d].fxType, target: deck[d].fxTarget, on: deck[d].fxOn)
+    }
+    /// Chip click: select + engage; clicking the active effect switches it off.
+    func selectFX(_ d: Int, _ type: DeckEngine.FXType) {
+        if type == .off || (deck[d].fxType == type && deck[d].fxOn) {
+            deck[d].fxOn = false
+            if type != .off { deck[d].fxType = type }
+        } else {
+            deck[d].fxType = type
+            deck[d].fxOn = true
+            startAudio()
+        }
+        pushFX(d)
+    }
+    func toggleFX(_ d: Int) {
+        deck[d].fxOn.toggle()
+        if deck[d].fxOn {
+            if deck[d].fxType == .off { deck[d].fxType = .echo }
+            startAudio()
+        }
+        pushFX(d)
+    }
+    func cycleFXType(_ d: Int) {
+        let all: [DeckEngine.FXType] = [.echo, .duck, .roll, .reverse, .drive]
+        let next = all[((all.firstIndex(of: deck[d].fxType) ?? -1) + 1) % all.count]
+        deck[d].fxType = next
+        pushFX(d)
+    }
+    func setFXTarget(_ d: Int, _ t: DeckEngine.FXTarget) { deck[d].fxTarget = t; pushFX(d) }
+    func cycleFXTarget(_ d: Int) {
+        let all = DeckEngine.FXTarget.allCases
+        setFXTarget(d, all[((all.firstIndex(of: deck[d].fxTarget) ?? 0) + 1) % all.count])
+    }
+    func scaleFXBeats(_ d: Int, by f: Double) {
+        deck[d].fxBeats = min(4, max(1.0 / 16.0, deck[d].fxBeats * f))
+        engine.setFXBeats(d, deck[d].fxBeats)
+    }
+    func setFXAmount(_ d: Int, _ a: Float) {
+        deck[d].fxAmount = a
+        engine.setFXAmount(d, a)
+    }
+    /// Momentary echo-out (G/H keys or press-and-hold in the UI).
+    func fxRelease(_ d: Int, held: Bool) {
+        guard deck[d].fxHeld != held else { return }
+        deck[d].fxHeld = held
+        if held { startAudio() }
+        engine.setFXRelease(d, held)
+    }
+
+    /// keyDown/keyUp pairing for the momentary echo-out — keyboardShortcut
+    /// buttons can't see key-up, so G/H run through a local event monitor.
+    private var keyMonitor: Any?
+    func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] ev in
+            guard let self,
+                  !ev.modifierFlags.contains(.command),
+                  let ch = ev.charactersIgnoringModifiers?.lowercased(),
+                  ch == "g" || ch == "h",
+                  !(NSApp.keyWindow?.firstResponder is NSTextView)   // not while typing
+            else { return ev }
+            if ev.type == .keyDown && ev.isARepeat { return nil }
+            self.fxRelease(ch == "g" ? 0 : 1, held: ev.type == .keyDown)
+            return nil
+        }
+    }
+
     /// Live post-EQ band levels for the stage (T4→T2 hand-off): loudest deck wins.
     var liveBands: [Float]? {
         let a = deck[0].playing ? deck[0].bands : nil
@@ -226,7 +303,10 @@ struct DecksView: View {
         .padding(10)
         .background(Color(white: 0.05))
         .background(KeyMap())     // hidden buttons carrying the shortcuts
-        .onAppear { session.startAudio() }
+        .onAppear {
+            session.startAudio()
+            session.installKeyMonitor()   // momentary echo-out (G/H key-up)
+        }
     }
 
     private var statusRow: some View {
@@ -246,7 +326,7 @@ struct DecksView: View {
                 .foregroundColor(session.status.contains("failed") ? .red : .secondary)
                 .lineLimit(1)
             Spacer()
-            Text("keys: Q/P play · A/L cue · S/K sync · E/U loop · 1234/7890 cues · ←→ xfade")
+            Text("keys: Q/P play · A/L cue · S/K sync · E/U loop · F/J FX · G/H echo-out · ←→ xfade")
                 .font(.caption2.monospaced()).foregroundColor(.secondary.opacity(0.7))
         }
         .padding(.horizontal, 12)
@@ -279,6 +359,7 @@ private struct DeckPane: View {
                 loopCluster
                 pitchCluster
             }
+            fxPane
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.09)))
@@ -386,6 +467,68 @@ private struct DeckPane: View {
 
     private var loopLabel: String {
         ui.loopBeats < 1 ? "1/\(Int(1 / ui.loopBeats))" : "\(Int(ui.loopBeats))"
+    }
+
+    // ---- beat FX row (T5): the θ math on knobs — cycle = beats × the grid,
+    // DUCK/ROLL/REV are pure φ functions, ECHO glides tape-style ----
+    private var fxPane: some View {
+        HStack(spacing: 8) {
+            Text("FX").font(.caption2.bold())
+                .foregroundColor(ui.fxOn ? accent : .secondary)
+            HStack(spacing: 3) {
+                ForEach([DeckEngine.FXType.echo, .duck, .roll, .reverse, .drive], id: \.self) { t in
+                    fxChip(t.label, active: ui.fxType == t && ui.fxOn) {
+                        session.selectFX(d, t)
+                    }
+                }
+            }
+            Divider().frame(height: 14)
+            HStack(spacing: 3) {
+                ForEach(DeckEngine.FXTarget.allCases, id: \.self) { t in
+                    fxChip(t.label, active: ui.fxTarget == t, dim: true) {
+                        session.setFXTarget(d, t)
+                    }
+                }
+            }
+            Divider().frame(height: 14)
+            HStack(spacing: 4) {
+                Button { session.scaleFXBeats(d, by: 0.5) } label: { Text("½").font(.caption2) }
+                Text(fxBeatsLabel + " b").font(.caption2.monospaced())
+                    .foregroundColor(.yellow.opacity(0.9)).frame(width: 44)
+                    .help("FX cycle in beats — echo time, duck period, roll/reverse slice (θ-derived)")
+                Button { session.scaleFXBeats(d, by: 2) } label: { Text("×2").font(.caption2) }
+            }
+            .buttonStyle(.bordered).controlSize(.mini)
+            Slider(value: Binding(get: { Double(ui.fxAmount) },
+                                  set: { session.setFXAmount(d, Float($0)) }), in: 0...1)
+                .frame(width: 70)
+                .help("amount — echo feedback / duck depth / drive")
+            Spacer()
+            Text("ECHO OUT").font(.caption2.bold())
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(ui.fxHeld ? Color.red.opacity(0.85) : Color(white: 0.16),
+                            in: RoundedRectangle(cornerRadius: 4))
+                .foregroundColor(ui.fxHeld ? .white : .secondary)
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { _ in if !ui.fxHeld { session.fxRelease(d, held: true) } }
+                    .onEnded { _ in session.fxRelease(d, held: false) })
+                .help("hold: mute the deck into beat-spaced decaying repeats (also key \(d == 0 ? "G" : "H"))")
+        }
+    }
+
+    private func fxChip(_ label: String, active: Bool, dim: Bool = false,
+                        _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label).font(.system(size: 9, weight: .bold).monospaced())
+                .padding(.horizontal, 5).padding(.vertical, 3)
+        }
+        .buttonStyle(.plain)
+        .background(active ? (dim ? accent.opacity(0.35) : accent.opacity(0.6)) : Color(white: 0.16),
+                    in: RoundedRectangle(cornerRadius: 4))
+    }
+
+    private var fxBeatsLabel: String {
+        ui.fxBeats < 1 ? "1/\(Int((1 / ui.fxBeats).rounded()))" : "\(Int(ui.fxBeats))"
     }
 
     private var pitchCluster: some View {
@@ -636,6 +779,19 @@ private struct KeyMap: View {
             key(.leftArrow) { session.setCrossfader(session.crossfader - 0.08) }
             key(.rightArrow) { session.setCrossfader(session.crossfader + 0.08) }
             key(.downArrow) { session.setCrossfader(0) }
+            // beat FX: F/J on-off, T/O type (⇧ = band target), V B / , . beats
+            // (the momentary echo-out G/H needs key-up and lives in the
+            // session's NSEvent monitor, not here)
+            key("f") { session.toggleFX(0) }
+            key("j") { session.toggleFX(1) }
+            key("t") { session.cycleFXType(0) }
+            key("o") { session.cycleFXType(1) }
+            key("t", mods: .shift) { session.cycleFXTarget(0) }
+            key("o", mods: .shift) { session.cycleFXTarget(1) }
+            key("v") { session.scaleFXBeats(0, by: 0.5) }
+            key("b") { session.scaleFXBeats(0, by: 2) }
+            key(",") { session.scaleFXBeats(1, by: 0.5) }
+            key(".") { session.scaleFXBeats(1, by: 2) }
         }
         .frame(width: 0, height: 0).opacity(0)
     }
