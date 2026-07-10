@@ -1,0 +1,49 @@
+{
+  "engine_version": "0.1.0",
+  "song_id": "17574893_Good Lies_(Original Mix)-858541ff",
+  "source_path": "/Users/jgasimli/Desktop/Music/17574893_Good Lies_(Original Mix).flac",
+  "content_hash": "858541fff41a6651bdb4df4ba1431b9f78c138ab71fe492fbc4e42e4349d05aa",
+  "created_at": "2026-06-21T05:43:30",
+  "sr": 44100,
+  "n_samples": 7061622,
+  "duration_s": 160.12748299319728,
+  "n_fft": 2048,
+  "hop": 1024,
+  "win": 2048,
+  "n_frames": 6895,
+  "bpm": 124.0,
+  "bpm_confidence": null,
+  "bpm_source": "provided",
+  "B": 4,
+  "omega_rad_per_s": 3.2463124087094526,
+  "omega_rad_per_frame": 0.07537922690518094,
+  "r0": 1.0,
+  "f_ref": 440.0,
+  "sigma": 0.5,
+  "floor_db": -80.0,
+  "smooth_frames": 1,
+  "n_definition": "hop/frame index; angle alpha = omega_n * n, omega_n = omega*hop/sr",
+  "state_definition": "A = loudness dB; I = spectral centroid in semitones above f_ref (energy-gated)",
+  "force_weighting": {
+    "w_amp": 1.0,
+    "w_int": 1.0,
+    "normalization": "each derivative divided by its own std over the track",
+    "note": "open knob (skill: 'weighting inside ||F||')"
+  },
+  "stored_state": "only A, I, chroma, engagement are stored; force/climb/geometry/colour are derived on load",
+  "colour": "hue = circular mean of 12-d chroma; sat = concentration; val = loudness",
+  "caveats": [
+    "chroma->timbre is many-to-one (exp3): different timbres can share a hue",
+    "bpm is a light autocorrelation estimate; half/double octave errors are common -- override with bpm=",
+    "r0 constant: the radius law (completion = largest radius) is still open",
+    "record is uniform-density: ||F|| marks where to offload/highload, but adaptive variable-rate storage is not yet implemented"
+  ],
+  "engagement_schema": {
+    "per_frame": "engagement[n] accumulates listener attention aligned to frame n",
+    "status": "reserved; zeros until real playback/interaction capture exists",
+    "intended_signals": [
+      "volume-ups",
+      "micro-jitters/replays (most-rewatched)"
+    ]
+  }
+}

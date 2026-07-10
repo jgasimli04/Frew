@@ -1,0 +1,13 @@
+[package]
+name = "bee-ffi"
+version.workspace = true
+edition.workspace = true
+description = "C ABI over bee-format for native consumers: Swift (iOS/macOS), Kotlin/JNI (Android), C/C++/C# (Windows/Linux)."
+
+[lib]
+name = "bee_ffi"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+bee-format = { path = "../bee-format" }
+serde_json = "1"

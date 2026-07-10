@@ -1,0 +1,49 @@
+{
+  "engine_version": "0.1.0",
+  "song_id": "15928052_Liverpool Street In The Rain_(Original Mix)-148a7670",
+  "source_path": "/Users/jgasimli/Desktop/Music/15928052_Liverpool Street In The Rain_(Original Mix).flac",
+  "content_hash": "148a76704da61f61941cc82cd2460ec4952e2dac9385fe52102d06628a0041b2",
+  "created_at": "2026-06-21T05:43:29",
+  "sr": 44100,
+  "n_samples": 14660480,
+  "duration_s": 332.43718820861676,
+  "n_fft": 2048,
+  "hop": 1024,
+  "win": 2048,
+  "n_frames": 14315,
+  "bpm": 64.599609375,
+  "bpm_confidence": 0.9161388921458102,
+  "bpm_source": "estimated",
+  "B": 4,
+  "omega_rad_per_s": 1.6912138186439194,
+  "omega_rad_per_frame": 0.039269908169872414,
+  "r0": 1.0,
+  "f_ref": 440.0,
+  "sigma": 0.5,
+  "floor_db": -80.0,
+  "smooth_frames": 1,
+  "n_definition": "hop/frame index; angle alpha = omega_n * n, omega_n = omega*hop/sr",
+  "state_definition": "A = loudness dB; I = spectral centroid in semitones above f_ref (energy-gated)",
+  "force_weighting": {
+    "w_amp": 1.0,
+    "w_int": 1.0,
+    "normalization": "each derivative divided by its own std over the track",
+    "note": "open knob (skill: 'weighting inside ||F||')"
+  },
+  "stored_state": "only A, I, chroma, engagement are stored; force/climb/geometry/colour are derived on load",
+  "colour": "hue = circular mean of 12-d chroma; sat = concentration; val = loudness",
+  "caveats": [
+    "chroma->timbre is many-to-one (exp3): different timbres can share a hue",
+    "bpm is a light autocorrelation estimate; half/double octave errors are common -- override with bpm=",
+    "r0 constant: the radius law (completion = largest radius) is still open",
+    "record is uniform-density: ||F|| marks where to offload/highload, but adaptive variable-rate storage is not yet implemented"
+  ],
+  "engagement_schema": {
+    "per_frame": "engagement[n] accumulates listener attention aligned to frame n",
+    "status": "reserved; zeros until real playback/interaction capture exists",
+    "intended_signals": [
+      "volume-ups",
+      "micro-jitters/replays (most-rewatched)"
+    ]
+  }
+}
