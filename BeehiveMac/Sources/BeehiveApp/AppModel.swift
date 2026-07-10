@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
             if selected != oldValue {
                 cursor = 0
                 stopPlayback()
+                if selected != loadedURL { bandEnv = nil }   // stage signals belong to the loaded song
             }
         }
     }
@@ -38,6 +39,11 @@ final class AppModel: ObservableObject {
     @Published var isPlaying = false
     private var playbackTimer: Timer?
     private var loadedURL: URL?
+
+    // AV stage signals: 5-band envelopes + bass-departure, computed offline at
+    // the record's frame grid from the same PCM the player holds (T2).
+    @Published var bandEnv: BandEnvelopes?
+    private var envURL: URL?
 
     // Navigation state shared across the 3D view, the plots, and the inspector.
     @Published var cursor: Int = 0                 // current frame index (the playhead)
@@ -87,18 +93,23 @@ final class AppModel: ObservableObject {
             if loadedURL != url {
                 status = "Opening \(url.lastPathComponent)…"
                 let t0 = Date()
+                let channels: [[Float]]
+                let sr: Double
                 if url.pathExtension.lowercased() == "bee" {
                     let bee = try BeeFile(path: url.path)
-                    player.load(channels: bee.floatPCM(), sampleRate: bee.sampleRate)
+                    channels = bee.floatPCM()
+                    sr = bee.sampleRate
+                    player.load(channels: channels, sampleRate: sr)
                     status = String(format: ".bee decoded natively in %.2f s",
                                     -t0.timeIntervalSinceNow)
                 } else {
-                    let (channels, sr) = try Audio.loadChannels(url: url)
+                    (channels, sr) = try Audio.loadChannels(url: url)
                     player.load(channels: channels, sampleRate: sr)
                     status = String(format: "decoded by AVFoundation (control chain) in %.2f s",
                                     -t0.timeIntervalSinceNow)
                 }
                 loadedURL = url
+                computeBandEnvelopes(channels: channels, sr: sr, meta: r.meta, for: url)
             }
             var t = Double(safeCursor) * Double(r.meta.hop) / r.meta.sr
             if t >= player.duration - 0.05 { t = 0 }
@@ -114,6 +125,30 @@ final class AppModel: ObservableObject {
         player.pause()
         isPlaying = false
         stopTimer()
+    }
+
+    /// Offline stage signals from the just-decoded PCM — off the main actor;
+    /// the stage degrades gracefully (record-driven only) until they land.
+    private func computeBandEnvelopes(channels: [[Float]], sr: Double,
+                                      meta: HelixMeta, for url: URL) {
+        guard envURL != url else { return }
+        envURL = url
+        bandEnv = nil
+        Task.detached(priority: .utility) {
+            let n = channels.first?.count ?? 0
+            var mono = [Float](repeating: 0, count: n)
+            for ch in channels {
+                for i in 0..<min(n, ch.count) { mono[i] += ch[i] }
+            }
+            if channels.count > 1 {
+                let inv = 1 / Float(channels.count)
+                for i in 0..<n { mono[i] *= inv }
+            }
+            let env = BandEnvelopes(mono: mono, sr: sr, nFFT: meta.nFFT, hop: meta.hop)
+            await MainActor.run {
+                if self.envURL == url { self.bandEnv = env }
+            }
+        }
     }
 
     private func startTimer() {
