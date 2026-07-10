@@ -57,6 +57,51 @@ static void bq_design(Biquad *q, int type, double fc, double sr, double Q)
     q->a1 = (float)(-2.0 * cw / a0); q->a2 = (float)((1.0 - alpha) / a0);
 }
 
+/* ---------------------------------------------------------------- rings  */
+
+/* Stereo circular buffer for the FX delay/capture lines. Allocated once at
+ * deck creation (never on the render thread). */
+typedef struct {
+    float *b[2];
+    int len, w;
+} Ring;
+
+static bool ring_init(Ring *r, int len)
+{
+    r->w = 0; r->len = 0;
+    r->b[0] = calloc((size_t)len, sizeof(float));
+    r->b[1] = calloc((size_t)len, sizeof(float));
+    if (!r->b[0] || !r->b[1]) { free(r->b[0]); free(r->b[1]); r->b[0] = r->b[1] = NULL; return false; }
+    r->len = len;
+    return true;
+}
+static void ring_free(Ring *r) { free(r->b[0]); free(r->b[1]); }
+static void ring_clear(Ring *r)
+{
+    if (r->len) { memset(r->b[0], 0, (size_t)r->len * sizeof(float));
+                  memset(r->b[1], 0, (size_t)r->len * sizeof(float)); }
+    r->w = 0;
+}
+/* value `back` frames before the write head (fractional, linear interp) */
+static inline float ring_tap(const Ring *r, int ch, double back)
+{
+    double rp = (double)r->w - back;
+    while (rp < 0) rp += (double)r->len;
+    int i0 = (int)rp, i1 = i0 + 1 >= r->len ? 0 : i0 + 1;
+    float t = (float)(rp - (double)i0);
+    return r->b[ch][i0] * (1.0f - t) + r->b[ch][i1] * t;
+}
+static inline float ring_at(const Ring *r, int ch, int idx)
+{
+    idx %= r->len; if (idx < 0) idx += r->len;
+    return r->b[ch][idx];
+}
+static inline void ring_push(Ring *r, float l, float rr)
+{
+    r->b[0][r->w] = l; r->b[1][r->w] = rr;
+    if (++r->w >= r->len) r->w = 0;
+}
+
 /* ------------------------------------------------------------- the deck  */
 
 static const double BD_XOVER[4] = { 60.0, 250.0, 2000.0, 8000.0 };
@@ -108,6 +153,32 @@ struct BDDeck {
     float env_l[BD_BANDS];
     float scratch[2][BD_MAX_BLOCK];
     float band_buf[BD_BANDS][2][BD_MAX_BLOCK];
+    double posb[BD_MAX_BLOCK];   /* per-frame source position (for FX phase) */
+
+    /* ---- beat FX — UI writes ---- */
+    _Atomic int fx_type, fx_target;
+    _Atomic bool fx_on, fx_rel;
+    _Atomic double fx_beats;     /* cycle length in beats */
+    _Atomic float fx_amount;     /* 0..1 → feedback / depth / drive */
+    _Atomic double beat_src;     /* source samples per beat (0 = no grid) */
+    _Atomic double beat0_at;
+    _Atomic double pub_cyc;      /* render publishes cycle length (out frames) */
+
+    /* ---- beat FX — render state ---- */
+    Ring echo, cap, rel;         /* delay line · cycle capture · release line */
+    int cur_type;
+    bool fx_was_on;
+    float fx_wet_g;              /* smoothed engage gain */
+    float fx_wm[BD_BANDS];       /* smoothed band→wet-bus routing mask */
+    double echo_D, rel_D;        /* slewed delay times, output frames */
+    double last_phi, phi_free;
+    int wrap_last_start;         /* cap index where the current cycle began */
+    int wrap_prev_start, wrap_prev_len; /* last complete cycle in cap */
+    int roll_start, roll_len;    /* latched slice while ROLL is engaged */
+    double roll_k;
+    int rel_state;               /* 0 idle · 1 held · 2 tail ringing out */
+    float rel_in_g, rel_dry_g, rel_wet_g;
+    float rel_blockpeak;
 };
 
 BDDeck *bd_deck_new(double sample_rate)
@@ -137,12 +208,24 @@ BDDeck *bd_deck_new(double sample_rate)
     bq_design(&d->filt[0], BQ_LP, 0.49 * sample_rate, sample_rate, RT2I);
     bq_design(&d->filt[1], BQ_LP, 0.49 * sample_rate, sample_rate, RT2I);
     d->cur_filter = 0.0f;
+    /* FX rings: 8 s covers a 4-beat cycle down to 30 bpm (×2 for capture);
+     * the release line only ever repeats ≤ its 2 s. */
+    ring_init(&d->echo, (int)(8.0 * sample_rate));
+    ring_init(&d->cap,  (int)(8.0 * sample_rate));
+    ring_init(&d->rel,  (int)(2.0 * sample_rate));
+    atomic_store(&d->fx_target, BD_FXT_ALL);
+    atomic_store(&d->fx_beats, 1.0);
+    atomic_store(&d->fx_amount, 0.5f);
+    for (int b = 0; b < BD_BANDS; b++) d->fx_wm[b] = 1.0f;
+    d->rel_in_g = 1.0f; d->rel_dry_g = 1.0f;
+    d->wrap_last_start = -1;
     return d;
 }
 
 void bd_deck_free(BDDeck *d)
 {
     if (!d) return;
+    ring_free(&d->echo); ring_free(&d->cap); ring_free(&d->rel);
     free(d->chan[0]); free(d->chan[1]);
     free(d);
 }
@@ -172,6 +255,17 @@ void bd_deck_load(BDDeck *d, const float *left, const float *right,
     for (int c = 0; c < 2; c++) bq_reset(&d->comp1[c]);
     bq_reset(&d->comp2[0]);
     bq_reset(&d->filt[0]); bq_reset(&d->filt[1]);
+    /* FX render state restarts with the track (render is gated by `loaded`
+     * while we touch the rings here) */
+    ring_clear(&d->echo); ring_clear(&d->cap); ring_clear(&d->rel);
+    d->fx_wet_g = 0; d->fx_was_on = false;
+    d->echo_D = 0; d->rel_D = 0;
+    d->last_phi = 0; d->phi_free = 0;
+    d->wrap_last_start = -1; d->wrap_prev_len = 0;
+    d->roll_len = 0; d->roll_k = 0;
+    d->rel_state = 0; d->rel_in_g = 1; d->rel_dry_g = 1; d->rel_wet_g = 0;
+    atomic_store(&d->beat_src, 0.0);
+    atomic_store(&d->beat0_at, 0.0);
     atomic_store(&d->loaded, true);
 }
 
@@ -230,6 +324,36 @@ void bd_deck_set_filter(BDDeck *d, float knob)
 
 void bd_deck_band_levels(const BDDeck *d, float out[BD_BANDS])
 { for (int b = 0; b < BD_BANDS; b++) out[b] = atomic_load(&d->env[b]); }
+
+void bd_deck_set_grid(BDDeck *d, double beat_samples, double beat0_sample)
+{
+    atomic_store(&d->beat_src, beat_samples > 0 ? beat_samples : 0.0);
+    atomic_store(&d->beat0_at, beat0_sample);
+}
+
+void bd_deck_set_fx(BDDeck *d, int type, int target, bool on)
+{
+    if (type < BD_FX_OFF || type > BD_FX_DRIVE) type = BD_FX_OFF;
+    if (target < BD_FXT_LOW || target > BD_FXT_ALL) target = BD_FXT_ALL;
+    atomic_store(&d->fx_type, type);
+    atomic_store(&d->fx_target, target);
+    atomic_store(&d->fx_on, on && type != BD_FX_OFF);
+}
+
+void bd_deck_set_fx_beats(BDDeck *d, double beats)
+{
+    if (beats < 1.0 / 16.0) beats = 1.0 / 16.0;
+    if (beats > 8.0) beats = 8.0;
+    atomic_store(&d->fx_beats, beats);
+}
+
+void bd_deck_set_fx_amount(BDDeck *d, float a)
+{ atomic_store(&d->fx_amount, a < 0 ? 0 : a > 1 ? 1 : a); }
+
+void bd_deck_set_fx_release(BDDeck *d, bool held)
+{ atomic_store(&d->fx_rel, held); }
+
+double bd_deck_fx_cycle(const BDDeck *d) { return atomic_load(&d->pub_cyc); }
 
 /* cubic Hermite (Catmull-Rom) around integer i for fractional t */
 static inline float herm(const float *x, int64_t n, double p)
@@ -318,6 +442,7 @@ static void deck_render(BDDeck *d, int32_t n)
 
     /* ---- transport + interpolation into scratch ---- */
     for (int32_t i = 0; i < n; i++) {
+        d->posb[i] = d->pos;               /* FX phase source, per frame */
         d->play_gain = smooth(d->play_gain, tgt_play, coef_play);
         if (loaded && d->play_gain > 0.0f) {
             d->rate = target_rate + (d->rate - target_rate) * rate_coef;
@@ -407,25 +532,192 @@ static void deck_render(BDDeck *d, int32_t n)
         }
     }
 
-    /* ---- band gains + envelopes, then sum with trim/fader ---- */
+    /* ---- beat FX prelude (block level) --------------------------------
+     * Cycle length: beat_src × beats source samples → /rate output frames.
+     * Without a grid the FX free-runs on a 0.5 s pseudo-beat.             */
+    int fx_ty = atomic_load(&d->fx_type);
+    int fx_tgt = atomic_load(&d->fx_target);
+    bool fx_on = atomic_load(&d->fx_on);
+    bool rel_held = atomic_load(&d->fx_rel);
+    float fx_amt = atomic_load(&d->fx_amount);
+    double fx_beats = atomic_load(&d->fx_beats);
+    double bsrc = atomic_load(&d->beat_src);
+    double b0 = atomic_load(&d->beat0_at);
+    double cyc_src = bsrc * fx_beats;
+    double rate_now = d->rate > 0.05 ? d->rate : 1.0;
+    double cyc_out = bsrc > 0 ? cyc_src / rate_now : 0.5 * sr * fx_beats;
+    double cap_max = d->cap.len > 16 ? (double)(d->cap.len / 2 - 4) : 64.0;
+    if (cyc_out < 64.0) cyc_out = 64.0;
+    if (cyc_out > cap_max) cyc_out = cap_max;
+    atomic_store(&d->pub_cyc, cyc_out);
+
+    if (fx_ty != d->cur_type) {          /* type swap: restart wet, keep rings */
+        d->cur_type = fx_ty;
+        d->fx_wet_g = 0.0f;
+        d->roll_len = 0;
+        d->echo_D = cyc_out;
+    }
+    if (d->echo_D <= 0) d->echo_D = cyc_out;
+    if (d->rel_D <= 0) d->rel_D = cyc_out;
+    /* ROLL engage: latch the last complete cycle, keyed at the current phase
+     * so the grab continues seamlessly from what was just playing. */
+    if (fx_on && !d->fx_was_on && d->cur_type == BD_FX_ROLL && d->wrap_prev_len > 1) {
+        d->roll_start = d->wrap_prev_start;
+        d->roll_len = d->wrap_prev_len;
+        d->roll_k = d->last_phi * (double)d->roll_len;
+    }
+    d->fx_was_on = fx_on;
+
+    float fx_fb = 0.25f + 0.60f * fx_amt;          /* echo feedback ≤ .85 */
+    float fx_lvl = 0.35f + 0.65f * fx_amt;         /* echo wet level      */
+    float drive_g = 1.0f + 24.0f * fx_amt;
+    float drive_norm = 1.0f / tanhf(drive_g);
+    float drive_mix = fx_amt < 0.83f ? fx_amt * 1.2f : 1.0f;
+    float wet_tgt = fx_on ? 1.0f : 0.0f;
+    float mtgt[BD_BANDS];                          /* band → wet-bus mask */
+    for (int b = 0; b < BD_BANDS; b++) {
+        bool in = fx_tgt == BD_FXT_ALL || (fx_tgt == BD_FXT_LOW && b <= 1) ||
+                  (fx_tgt == BD_FXT_MID && b == 2) || (fx_tgt == BD_FXT_HI && b >= 3);
+        mtgt[b] = in ? 1.0f : 0.0f;
+    }
+    bool fx_rings = d->echo.len > 0 && d->cap.len > 0 && d->rel.len > 0;
+    double coefD = exp(-1.0 / (0.080 * sr));       /* delay-time glide ~80 ms */
+    /* release punch-out state machine */
+    if (rel_held) { if (d->rel_state != 1) d->rel_state = 1; }
+    else if (d->rel_state == 1) d->rel_state = 2;  /* → tail rings out */
+    d->rel_blockpeak = 0.0f;
+    float rel_fb = 0.62f;
+
+    /* ---- band gains + envelopes → FX buses → sum with trim/fader ---- */
     float g_master_frame;
     for (int32_t i = 0; i < n; i++) {
         d->g_trim = smooth(d->g_trim, t_trim, coef_gain);
         d->g_fader = smooth(d->g_fader, t_fader, coef_gain);
         g_master_frame = d->g_trim * d->g_fader;
-        float suml = 0.0f, sumr = 0.0f;
+        float wl = 0.0f, wr = 0.0f, dl = 0.0f, dr = 0.0f;
         for (int b = 0; b < BD_BANDS; b++) {
             d->g_band[b] = smooth(d->g_band[b], t_band[b], coef_gain);
             float bl = d->band_buf[b][0][i] * d->g_band[b];
             float br = d->band_buf[b][1][i] * d->g_band[b];
-            suml += bl; sumr += br;
             float mag = fabsf(bl) > fabsf(br) ? fabsf(bl) : fabsf(br);
             float e = d->env_l[b] * env_decay;
             d->env_l[b] = mag > e ? mag : e;
+            d->fx_wm[b] = smooth(d->fx_wm[b], mtgt[b], coef_gain);
+            wl += bl * d->fx_wm[b]; wr += br * d->fx_wm[b];
+            dl += bl * (1.0f - d->fx_wm[b]); dr += br * (1.0f - d->fx_wm[b]);
         }
-        d->scratch[0][i] = suml * g_master_frame;
-        d->scratch[1][i] = sumr * g_master_frame;
+
+        /* phase φ in the FX cycle, from this frame's source position */
+        double phi;
+        if (bsrc > 0) {
+            double p = (d->posb[i] - b0) / cyc_src;
+            phi = p - floor(p);
+        } else {
+            d->phi_free += 1.0 / cyc_out;
+            if (d->phi_free >= 1.0) d->phi_free -= floor(d->phi_free);
+            phi = d->phi_free;
+        }
+        bool wrapped = phi < d->last_phi;
+        d->last_phi = phi;
+
+        float owl = wl, owr = wr;
+        if (fx_rings) {
+            /* cycle capture (always recording; wrap marks delimit cycles) */
+            if (wrapped) {
+                if (d->wrap_last_start >= 0) {
+                    int len = (d->cap.w - d->wrap_last_start + d->cap.len) % d->cap.len;
+                    if (len >= 32 && len <= d->cap.len / 2) {
+                        d->wrap_prev_start = d->wrap_last_start;
+                        d->wrap_prev_len = len;
+                    } else d->wrap_prev_len = 0;
+                }
+                d->wrap_last_start = d->cap.w;
+            }
+            ring_push(&d->cap, wl, wr);
+
+            d->fx_wet_g = smooth(d->fx_wet_g, wet_tgt, coef_gain);
+            float wg = d->fx_wet_g;
+            switch (d->cur_type) {
+            case BD_FX_ECHO: {
+                d->echo_D = cyc_out + (d->echo_D - cyc_out) * coefD;
+                float tl = ring_tap(&d->echo, 0, d->echo_D);
+                float tr = ring_tap(&d->echo, 1, d->echo_D);
+                ring_push(&d->echo, wl + tl * fx_fb * wg, wr + tr * fx_fb * wg);
+                owl = wl + tl * fx_lvl * wg;
+                owr = wr + tr * fx_lvl * wg;
+                break;
+            }
+            case BD_FX_DUCK: {
+                float c = 0.5f + 0.5f * cosf((float)(2.0 * M_PI * phi));
+                float g = 1.0f - fx_amt * c * c * wg;
+                owl = wl * g; owr = wr * g;
+                break;
+            }
+            case BD_FX_ROLL:
+                if (d->roll_len > 1) {
+                    int off = (int)d->roll_k % d->roll_len;
+                    float rl = ring_at(&d->cap, 0, d->roll_start + off);
+                    float rr2 = ring_at(&d->cap, 1, d->roll_start + off);
+                    d->roll_k += 1.0;
+                    owl = wl * (1.0f - wg) + rl * wg;
+                    owr = wr * (1.0f - wg) + rr2 * wg;
+                }
+                break;
+            case BD_FX_REVERSE:
+                if (d->wrap_prev_len > 1) {
+                    int off = (int)((1.0 - phi) * (double)(d->wrap_prev_len - 1));
+                    float rl = ring_at(&d->cap, 0, d->wrap_prev_start + off);
+                    float rr2 = ring_at(&d->cap, 1, d->wrap_prev_start + off);
+                    owl = wl * (1.0f - wg) + rl * wg;
+                    owr = wr * (1.0f - wg) + rr2 * wg;
+                }
+                break;
+            case BD_FX_DRIVE: {
+                float m = drive_mix * wg;
+                owl = wl * (1.0f - m) + tanhf(drive_g * wl) * drive_norm * m;
+                owr = wr * (1.0f - m) + tanhf(drive_g * wr) * drive_norm * m;
+                break;
+            }
+            default:
+                break;
+            }
+            /* keep the echo line recording while unused so an engage (or a
+             * type swap back to ECHO) has a first tap ready immediately */
+            if (d->cur_type != BD_FX_ECHO)
+                ring_push(&d->echo, wl, wr);
+        }
+
+        float fl = dl + owl, fr = dr + owr;
+
+        /* release "echo out": beat-spaced repeats of the full deck signal,
+         * dry muted while held, tail rings out after release. */
+        if (fx_rings) {
+            float in_t, wet_t, dry_t, fb;
+            switch (d->rel_state) {
+            case 1:  in_t = 0; wet_t = 1; dry_t = 0; fb = rel_fb; break;
+            case 2:  in_t = 0; wet_t = 1; dry_t = 1; fb = rel_fb; break;
+            default: in_t = 1; wet_t = 0; dry_t = 1; fb = 0;      break;
+            }
+            d->rel_in_g = smooth(d->rel_in_g, in_t, coef_gain);
+            d->rel_wet_g = smooth(d->rel_wet_g, wet_t, coef_gain);
+            d->rel_dry_g = smooth(d->rel_dry_g, dry_t, coef_gain);
+            double relmax = (double)(d->rel.len - 4);
+            double rtgt = cyc_out > relmax ? relmax : cyc_out;
+            d->rel_D = rtgt + (d->rel_D - rtgt) * coefD;
+            float tl = ring_tap(&d->rel, 0, d->rel_D);
+            float tr = ring_tap(&d->rel, 1, d->rel_D);
+            ring_push(&d->rel, fl * d->rel_in_g + tl * fb, fr * d->rel_in_g + tr * fb);
+            float a = fabsf(tl) > fabsf(tr) ? fabsf(tl) : fabsf(tr);
+            if (a > d->rel_blockpeak) d->rel_blockpeak = a;
+            fl = fl * d->rel_dry_g + tl * d->rel_wet_g;
+            fr = fr * d->rel_dry_g + tr * d->rel_wet_g;
+        }
+
+        d->scratch[0][i] = fl * g_master_frame;
+        d->scratch[1][i] = fr * g_master_frame;
     }
+    /* tail fully decayed → release line back to pass-through recording */
+    if (d->rel_state == 2 && d->rel_blockpeak < 1e-4f) d->rel_state = 0;
     for (int b = 0; b < BD_BANDS; b++) atomic_store(&d->env[b], d->env_l[b]);
 }
 

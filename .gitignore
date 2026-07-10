@@ -24,3 +24,6 @@ experiments/recon/*.dac
 .quarantine/
 .claude/
 .DS_Store
+
+# build products
+BeehiveMac/dist/
