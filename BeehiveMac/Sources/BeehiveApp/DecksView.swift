@@ -108,6 +108,33 @@ final class DeckSession: ObservableObject {
         return (r, min(max(frame, 0), r.nFrames - 1))
     }
 
+    /// The literal helix angle α at a deck's playhead — the θ math, on a dial.
+    func theta(_ d: Int) -> Double? {
+        guard let r = engine.info[d].record else { return nil }
+        let frame = min(max(Int(engine.position(d)) / max(r.meta.hop, 1), 0), r.nFrames - 1)
+        return r.alpha[frame].truncatingRemainder(dividingBy: 2 * .pi)
+    }
+
+    /// Beat-phase offset between the decks in milliseconds (θ phase-lock
+    /// evidence): 0 ms after SYNC means the grids are locked.
+    var beatDeltaMs: Double? {
+        guard deck[0].playing, deck[1].playing,
+              deck[0].beatSamples > 0, deck[1].beatSamples > 0 else { return nil }
+        let pA = engine.position(0).truncatingRemainder(dividingBy: deck[0].beatSamples) / deck[0].beatSamples
+        let pB = engine.position(1).truncatingRemainder(dividingBy: deck[1].beatSamples) / deck[1].beatSamples
+        var dPhase = pA - pB
+        if dPhase > 0.5 { dPhase -= 1 }
+        if dPhase < -0.5 { dPhase += 1 }
+        let beatSec = deck[0].beatSamples / deck[0].sampleRate / engine.userRate(0)
+        return dPhase * beatSec * 1000
+    }
+
+    var engineChip: (text: String, ok: Bool) {
+        engine.isRunning
+            ? (String(format: "engine ▸ %.0f Hz", engine.outputDeviceRate), true)
+            : ("engine stopped — press play", false)
+    }
+
     func load(url: URL, onto d: Int) {
         do {
             try engine.load(url: url, deck: d)
@@ -193,18 +220,36 @@ struct DecksView: View {
                 DeckPane(d: 1)
             }
             MixerPane()
-            HStack {
-                Text(session.status).font(.caption).foregroundColor(.secondary)
-                Spacer()
-                Text("keys: Q/P play · A/L cue · S/K sync · E/U loop · 1234/7890 cues · ←→ xfade")
-                    .font(.caption2.monospaced()).foregroundColor(.secondary.opacity(0.7))
-            }
-            .padding(.horizontal, 12)
+            LibraryPane()
+            statusRow
         }
         .padding(10)
         .background(Color(white: 0.05))
         .background(KeyMap())     // hidden buttons carrying the shortcuts
         .onAppear { session.startAudio() }
+    }
+
+    private var statusRow: some View {
+        HStack(spacing: 10) {
+            let chip = session.engineChip
+            Text(chip.text)
+                .font(.caption2.monospaced())
+                .foregroundColor(chip.ok ? .green.opacity(0.85) : .red)
+            if let delta = session.beatDeltaMs {
+                Text(String(format: "Δbeat %+.1f ms", delta))
+                    .font(.caption2.monospaced())
+                    .foregroundColor(abs(delta) < 8 ? .yellow : .secondary)
+                    .help("beat-phase offset between the decks on the θ grid — SYNC drives this to 0")
+            }
+            Text(session.status)
+                .font(.caption)
+                .foregroundColor(session.status.contains("failed") ? .red : .secondary)
+                .lineLimit(1)
+            Spacer()
+            Text("keys: Q/P play · A/L cue · S/K sync · E/U loop · 1234/7890 cues · ←→ xfade")
+                .font(.caption2.monospaced()).foregroundColor(.secondary.opacity(0.7))
+        }
+        .padding(.horizontal, 12)
     }
 }
 
@@ -255,6 +300,12 @@ private struct DeckPane: View {
                     .background(Color.yellow.opacity(0.85), in: Capsule())
             }
             Spacer()
+            ThetaDial(theta: session.theta(d), accent: accent)
+            Text(ui.bpm > 0 ? "θ grid" : "no grid")
+                .font(.caption2.monospaced())
+                .foregroundColor(ui.bpm > 0 ? .yellow : .secondary)
+                .help(ui.bpm > 0 ? "beatgrid = the helix angle from the .bee record — quantize, loops and SYNC run on it"
+                                 : "no helix record — load a .bee for the θ grid (sync/loops off)")
             if ui.bpm > 0 {
                 Text(String(format: "%.1f", ui.effBpm)).font(.title3.monospaced()).foregroundColor(accent)
                 Text("BPM").font(.caption2).foregroundColor(.secondary)

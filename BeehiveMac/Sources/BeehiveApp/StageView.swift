@@ -62,6 +62,9 @@ struct StageView: View {
             }
         }
         .animation(.easeInOut(duration: 0.8), value: stage.frontIsA)
+        .dropDestination(for: URL.self) { urls, _ in
+            stage.addClips(urls)          // drop mp4/mov straight onto the stage
+        }
         .overlay(alignment: .bottom) { controls }
         .onChange(of: model.safeCursor) { i in
             guard !liveOn, let r = model.record, i < r.alpha.count else { return }
@@ -268,6 +271,17 @@ final class StageController: ObservableObject {
         idx = -1
         lastBlock = Int.min
         if !clips.isEmpty { advance() }
+    }
+
+    /// Dropped videos join the set (a folder pick is not required first).
+    @discardableResult
+    func addClips(_ urls: [URL]) -> Bool {
+        let vids = urls.filter { Self.exts.contains($0.pathExtension.lowercased()) }
+        guard !vids.isEmpty else { return false }
+        let wasEmpty = clips.isEmpty
+        clips.append(contentsOf: vids.filter { !clips.contains($0) })
+        if wasEmpty, !clips.isEmpty { idx = -1; lastBlock = Int.min; advance() }
+        return true
     }
 
     /// Video speed gently slaved to the music's tempo.
