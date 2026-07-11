@@ -48,6 +48,7 @@ import soundfile as sf
 
 from .encode import derive_dynamics
 from .record import STORED_FIELDS, HelixRecord
+from .zinc import ANCHOR_BYTES, ZINC_VERSION, deserialize_anchors, serialize_anchors
 
 MAGIC = b"BEE\x00"
 FORMAT_VERSION = 0
@@ -162,10 +163,16 @@ def _deserialize_sidechannel(arrays_bytes, meta_bytes):
     return HelixRecord(meta=meta, **stored, **der)
 
 
-def write_bee(path, *, audio_path, record):
+def write_bee(path, *, audio_path, record, anchors=None, zinc_policy=None):
     """Pack a `.bee`: header + lossless audio payload (Layer 1) + helix side-channel
     (Layer 2). `audio_path` is the source whose PCM is preserved bit-exactly;
-    `record` is its HelixRecord. Returns the manifest dict that was written."""
+    `record` is its HelixRecord. Returns the manifest dict that was written.
+
+    `anchors` (optional): the Python-authored zinc keys, written verbatim as the
+    additive `zinc_index` section (ZINC_KEYFRAME_BLUEPRINT §5 — Python authors,
+    Rust consumes; old readers ignore the extra section). `zinc_policy` is the
+    ZincPolicy that placed them, recorded in the manifest as reference metadata.
+    """
     data, audio_meta = _read_source_pcm(audio_path)
     payload, codec = _encode_audio_payload(data, audio_meta)
     audio_meta["codec"] = codec
@@ -174,11 +181,14 @@ def write_bee(path, *, audio_path, record):
 
     arrays_bytes, meta_bytes = _serialize_sidechannel(record)
 
-    # lay the three sections out back-to-back; offsets are relative to blob start
+    # lay the sections out back-to-back; offsets are relative to blob start
+    chunks = [("audio", payload),
+              ("helix_arrays", arrays_bytes),
+              ("helix_meta", meta_bytes)]
+    if anchors is not None:
+        chunks.append(("zinc_index", serialize_anchors(anchors)))
     sections, blob, cursor = {}, bytearray(), 0
-    for name, chunk in (("audio", payload),
-                        ("helix_arrays", arrays_bytes),
-                        ("helix_meta", meta_bytes)):
+    for name, chunk in chunks:
         sections[name] = {"offset": cursor, "length": len(chunk)}
         blob += chunk
         cursor += len(chunk)
@@ -198,6 +208,19 @@ def write_bee(path, *, audio_path, record):
         "layers": "L1 audio payload reconstructs PCM; L2 helix side-channel = "
                   "navigation/indexing only, not audio reconstruction (blueprint §3)",
     }
+    if anchors is not None:
+        manifest["zinc"] = {
+            "version": zinc_policy.version if zinc_policy is not None else ZINC_VERSION,
+            "n_keys": len(anchors),
+            "key_bytes": ANCHOR_BYTES,
+            "layout": "<u32 frame, f32 r, theta, z, a, i> little-endian, no header",
+            # reference metadata only -- the stored keys are authoritative
+            "policy": None if zinc_policy is None else {
+                "tau_event": zinc_policy.tau_event,
+                "tau_max": zinc_policy.tau_max,
+                "lam": zinc_policy.lam,
+            },
+        }
     manifest_bytes = json.dumps(manifest).encode("utf-8")
 
     with open(path, "wb") as f:
@@ -231,6 +254,14 @@ def read_bee(path):
     record = _deserialize_sidechannel(raw["helix_arrays"], raw["helix_meta"])
     pcm = _decode_audio_payload(raw["audio"], manifest["audio"], manifest["audio"]["codec"])
     return record, pcm
+
+
+def read_zinc_index(path):
+    """The Python-authored zinc keys of a `.bee`, or None if the file predates
+    the `zinc_index` section (additive — old files stay valid)."""
+    _, raw = _read_container(path)
+    blob = raw.get("zinc_index")
+    return None if blob is None else deserialize_anchors(blob)
 
 
 def decode_bee_to_wav(path, wav_out):

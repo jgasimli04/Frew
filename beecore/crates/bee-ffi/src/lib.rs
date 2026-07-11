@@ -249,6 +249,10 @@ pub unsafe extern "C" fn bee_write_file(
                 audio,
                 helix_npz: npz,
                 helix_meta_json: meta.as_bytes(),
+                // FFI writer does not author keys (Python does); zinc plumb-through
+                // lands with the BeeDeck consumer step.
+                zinc_index: None,
+                zinc_meta: None,
                 created_at: None,
             },
         )

@@ -151,3 +151,22 @@ def test_reconstruct_state_snaps_at_keys():
     assert A[0] == -30.0 and A[9] == -30.0
     assert A[10] == -10.0 and A[14] == -10.0
     assert I[9] == 2.0 and I[10] == 4.0
+
+
+def test_wire_format_roundtrip_is_24_bytes_le():
+    """SECTION_ZINC_INDEX wire format: 24-byte LE records, roundtrip exact on
+    f32-representable values, layout pinned byte-for-byte against a hand-packed
+    record (the same pin as beecore's zinc_index_roundtrip test)."""
+    from beehive.zinc import ANCHOR_BYTES, deserialize_anchors, serialize_anchors
+
+    keys = [Anchor(frame=0, a=-30.0, i=12.0, r=1.0, theta=0.5, z=2.0),
+            Anchor(frame=4093, a=-12.5, i=24.0, r=1.0, theta=0.25, z=173.5)]
+    blob = serialize_anchors(keys)
+    assert ANCHOR_BYTES == 24 and len(blob) == 48
+    # hand-packed first record: <u32 frame, f32 r, theta, z, a, i> little-endian
+    import struct
+    assert blob[:24] == struct.pack("<Ifffff", 0, 1.0, 0.5, 2.0, -30.0, 12.0)
+    assert deserialize_anchors(blob) == keys
+
+    with pytest.raises(ValueError):
+        deserialize_anchors(blob[:23])

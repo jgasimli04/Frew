@@ -74,3 +74,27 @@ slogan.
 - Mean error rises with sparsity (0.11–0.17 → 0.84–0.95, still < τ_max): τ_e/τ_max
   remain the R/D knobs; per-track overrides ride in the policy, which will be
   serialized with the keys (T1).
+
+## 5. T1 shipped (2026-07-11) — keys in the container, Rust consumes
+
+The key stream now ships inside the `.bee` as the additive `zinc_index`
+section: 24-byte little-endian records `<u32 frame, f32 r, θ, z, a, i>`,
+no header, policy recorded in the manifest as reference metadata. Rust
+(`beecore/.../zinc.rs`) is the consumer only — reads keys, ZOH-reconstructs;
+placement never runs outside `beehive/zinc.py`.
+
+**DoD evidence.** Interop 42/42 (`beecore/interop/test_interop.py`: keys
+carried verbatim in both write directions, Rust reconstruction byte-identical
+to `beehive.zinc.reconstruct_state`, pre-index files read as no-index);
+`cargo test` 11/11; `pytest` 25/25. Real track (Good Lies): 322 keys,
+21.4× sparsity, 7,728 B = 2.8 KB/min, Rust reconstruction byte-identical.
+
+**Measured: placement is float32-sensitive; authorship is therefore
+encode-time-only.** Re-running the selector on the *stored* float32
+side-channel instead of the live float64 state gives Good Lies 300 keys vs
+322 (−6.8%; Liverpool and Night are unchanged at 788/895 — the drift
+concentrates in the ambient-heavy floor case, where borderline event-rail
+decisions flip). This is why the keys are baked at encode time from the live
+state and the stored wire keys are the single authoritative set: a consumer
+that re-derived placement from the stored side-channel would disagree with
+the encoder on exactly the tracks where ambient balance matters most.

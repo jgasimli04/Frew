@@ -71,6 +71,8 @@ fn roundtrip(pcm: Pcm, audio: AudioMeta, expect_codec: &str) {
         audio,
         helix_npz: &npz,
         helix_meta_json: &meta,
+        zinc_index: None,
+        zinc_meta: None,
         created_at: Some("2026-07-05T00:00:00Z".into()),
     };
     let (bytes, manifest) = write_bee_bytes(&params).unwrap();
@@ -137,6 +139,8 @@ fn pcm24_with_nonzero_low_byte_refused() {
         audio: audio_meta("PCM_24", Dtype::I32, 100, 1),
         helix_npz: &npz,
         helix_meta_json: &meta,
+        zinc_index: None,
+        zinc_meta: None,
         created_at: None,
     })
     .unwrap_err();
@@ -175,9 +179,79 @@ fn truncated_section_rejected() {
         audio: audio_meta("PCM_16", Dtype::I16, 500, 2),
         helix_npz: &npz,
         helix_meta_json: &meta,
+        zinc_index: None,
+        zinc_meta: None,
         created_at: None,
     })
     .unwrap();
     let err = read_bee_bytes(&bytes[..bytes.len() - 10]).unwrap_err();
     assert!(err.to_string().contains("past end"), "got: {err}");
+}
+
+#[test]
+fn zinc_index_roundtrip_and_reconstruction() {
+    let mut rng = Rng(9);
+    let frames = 1_000u64;
+    let pcm = Pcm::I16((0..frames).map(|_| rng.i16()).collect());
+    let (npz, meta) = helix_fixture(16);
+
+    // Keys hand-packed at the byte level so the test pins the wire layout
+    // (<u32 frame, f32 r, theta, z, a, i> LE) independently of read_anchors.
+    let key = |frame: u32, a: f32, i: f32| -> Vec<u8> {
+        let mut b = frame.to_le_bytes().to_vec();
+        for v in [1.0f32, 0.5, 2.0, a, i] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        b
+    };
+    let blob: Vec<u8> = [key(0, -30.0, 12.0), key(10, -12.5, 24.0), key(500, -60.0, 3.0)]
+        .concat();
+    let zmeta = serde_json::json!({ "version": 2, "n_keys": 3, "key_bytes": 24 });
+
+    let (bytes, manifest) = write_bee_bytes(&WriteParams {
+        pcm: &pcm,
+        audio: audio_meta("PCM_16", Dtype::I16, frames, 1),
+        helix_npz: &npz,
+        helix_meta_json: &meta,
+        zinc_index: Some(&blob),
+        zinc_meta: Some(zmeta.clone()),
+        created_at: None,
+    })
+    .unwrap();
+    assert_eq!(manifest.zinc, Some(zmeta));
+
+    let bee = read_bee_bytes(&bytes).unwrap();
+    assert_eq!(bee.zinc_index.as_deref(), Some(blob.as_slice()), "section must be verbatim");
+
+    let keys = bee_format::zinc::read_anchors(bee.zinc_index.as_deref().unwrap()).unwrap();
+    assert_eq!(keys.len(), 3);
+    assert_eq!((keys[1].frame, keys[1].a, keys[1].i), (10, -12.5, 24.0));
+    assert_eq!((keys[0].r, keys[0].theta, keys[0].z), (1.0, 0.5, 2.0));
+
+    // ZOH: held from each key until the next, snapping exactly at the keys.
+    let (a, i) = bee_format::zinc::reconstruct_state(&keys, 600);
+    assert!(a[..10].iter().all(|&v| v == -30.0) && i[0] == 12.0);
+    assert!(a[10..500].iter().all(|&v| v == -12.5) && i[499] == 24.0);
+    assert!(a[500..].iter().all(|&v| v == -60.0) && i[599] == 3.0);
+}
+
+#[test]
+fn zinc_index_absent_in_old_files() {
+    // Files written without the section read back as None — additive, no break.
+    let mut rng = Rng(10);
+    let pcm = Pcm::I16((0..100).map(|_| rng.i16()).collect());
+    let (npz, meta) = helix_fixture(4);
+    let (bytes, manifest) = write_bee_bytes(&WriteParams {
+        pcm: &pcm,
+        audio: audio_meta("PCM_16", Dtype::I16, 100, 1),
+        helix_npz: &npz,
+        helix_meta_json: &meta,
+        zinc_index: None,
+        zinc_meta: None,
+        created_at: None,
+    })
+    .unwrap();
+    assert_eq!(manifest.zinc, None);
+    let bee = read_bee_bytes(&bytes).unwrap();
+    assert!(bee.zinc_index.is_none());
 }

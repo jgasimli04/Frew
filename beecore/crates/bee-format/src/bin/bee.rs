@@ -7,6 +7,7 @@
 //!   bee extract-helix <file.bee> --npz-out <h.npz> --meta-out <hm.json>
 //!   bee encode --pcm <raw.bin> --audio-meta <am.json>
 //!              --helix-npz <h.npz> --helix-meta <hm.json> --out <file.bee>
+//!   bee index <file.bee> [--out <keys.json>] [--reconstruct-out <raw.bin>]
 //!
 //! Raw PCM files are little-endian interleaved samples in the dtype named by
 //! the audio meta JSON (exactly `numpy.ndarray.tobytes()` on a LE host).
@@ -14,6 +15,7 @@
 use std::collections::HashMap;
 use std::process::ExitCode;
 
+use bee_format::zinc;
 use bee_format::{read_bee, write_bee, AudioMeta, Dtype, Pcm, WriteParams};
 
 fn flags(args: &[String]) -> Result<(Vec<String>, HashMap<String, String>), String> {
@@ -89,6 +91,12 @@ fn run() -> Result<(), String> {
             let pcm = Pcm::from_le_bytes(dtype, &pcm_bytes).map_err(|e| e.to_string())?;
             let helix_npz = std::fs::read(npz_path).map_err(|e| e.to_string())?;
             let helix_meta = std::fs::read(hm_path).map_err(|e| e.to_string())?;
+            // Optional Python-authored key blob, carried verbatim (never generated here).
+            let zinc_blob = kv
+                .get("zinc-index")
+                .map(std::fs::read)
+                .transpose()
+                .map_err(|e| e.to_string())?;
 
             let manifest = write_bee(
                 out,
@@ -97,6 +105,8 @@ fn run() -> Result<(), String> {
                     audio,
                     helix_npz: &helix_npz,
                     helix_meta_json: &helix_meta,
+                    zinc_index: zinc_blob.as_deref(),
+                    zinc_meta: None,
                     created_at: None,
                 },
             )
@@ -106,8 +116,58 @@ fn run() -> Result<(), String> {
                 manifest.audio.codec.as_deref().unwrap_or("?")
             );
         }
+        // Inspect the Python-authored zinc index (this binary never generates
+        // keys — Python authors, Rust consumes; ZINC_KEYFRAME_BLUEPRINT §5).
+        "index" => {
+            let path = pos.first().ok_or("usage: bee index <file.bee> [--out <keys.json>]")?;
+            let bee = read_bee(path).map_err(|e| e.to_string())?;
+            let Some(blob) = bee.zinc_index.as_deref() else {
+                return Err(format!("{path} has no zinc_index section (pre-index file)"));
+            };
+            let keys = zinc::read_anchors(blob).map_err(|e| e.to_string())?;
+            let sc = bee.sidechannel().map_err(|e| e.to_string())?;
+
+            let dur_min =
+                bee.manifest.audio.frames as f64 / f64::from(bee.manifest.audio.sample_rate) / 60.0;
+            eprintln!(
+                "zinc index: {} keys over {} frames ({:.1}x sparsity) — {} B, {:.1} KB/min",
+                keys.len(),
+                sc.n_frames,
+                sc.n_frames as f64 / keys.len() as f64,
+                blob.len(),
+                blob.len() as f64 / 1024.0 / dur_min,
+            );
+
+            let out = serde_json::json!({
+                "zinc": bee.manifest.zinc,
+                "n_frames": sc.n_frames,
+                "n_keys": keys.len(),
+                "bytes": blob.len(),
+                "kb_per_min": blob.len() as f64 / 1024.0 / dur_min,
+                "keys": keys.iter().map(|k| serde_json::json!({
+                    "frame": k.frame, "r": k.r, "theta": k.theta,
+                    "z": k.z, "a": k.a, "i": k.i,
+                })).collect::<Vec<_>>(),
+            });
+            let json = serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?;
+            match kv.get("out") {
+                Some(p) => std::fs::write(p, json).map_err(|e| e.to_string())?,
+                None => println!("{json}"),
+            }
+
+            // ZOH reconstruction as raw f32 LE (A then I) — what the interop
+            // harness diffs bit-for-bit against beehive.zinc.reconstruct_state.
+            if let Some(p) = kv.get("reconstruct-out") {
+                let (a, i) = zinc::reconstruct_state(&keys, sc.n_frames);
+                let mut raw = Vec::with_capacity(8 * sc.n_frames);
+                for v in a.iter().chain(i.iter()) {
+                    raw.extend_from_slice(&v.to_le_bytes());
+                }
+                std::fs::write(p, raw).map_err(|e| e.to_string())?;
+            }
+        }
         _ => {
-            return Err("usage: bee <info|decode|extract-helix|encode> ... \
+            return Err("usage: bee <info|decode|extract-helix|encode|index> ... \
                         (see source header for flags)"
                 .into())
         }

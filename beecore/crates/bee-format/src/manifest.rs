@@ -52,6 +52,11 @@ pub struct Manifest {
     /// side-channel, the engine interprets it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidechannel: Option<serde_json::Value>,
+    /// Zinc-index summary (version, n_keys, layout, placement policy as
+    /// reference metadata). Opaque like `sidechannel`: the stored keys are
+    /// authoritative, Python authors them (ZINC_KEYFRAME_BLUEPRINT §5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zinc: Option<serde_json::Value>,
     pub sections: BTreeMap<String, Section>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layers: Option<String>,
@@ -63,3 +68,6 @@ pub struct Manifest {
 pub const SECTION_AUDIO: &str = "audio";
 pub const SECTION_HELIX_ARRAYS: &str = "helix_arrays";
 pub const SECTION_HELIX_META: &str = "helix_meta";
+/// Additive (2026-07-11): the Python-authored zinc keyframe index. Absent in
+/// older files; readers that don't know it ignore it.
+pub const SECTION_ZINC_INDEX: &str = "zinc_index";

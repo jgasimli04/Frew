@@ -43,6 +43,7 @@ integral, which each key re-anchors). We therefore anchor in state space.
 """
 
 import math
+import struct
 from dataclasses import dataclass
 
 import numpy as np
@@ -63,6 +64,36 @@ class Anchor:
     r: float        # helix radius (== r0, constant) -- self-describing
     theta: float    # helix angle alpha(n) mod 2pi (derivable from n; kept for self-description)
     z: float        # helix climb h(n) at the key (re-anchors the running integral)
+
+
+# SECTION_ZINC_INDEX wire format (blueprint §5): 24-byte little-endian records
+# ``<u32 frame, f32 r, theta, z, a, i>`` back-to-back, no header -- key count is
+# len(bytes)/24. Policy metadata (tau, lam, version) travels in the manifest,
+# not the blob. Values are stored f32: the stored keys ARE the authoritative
+# key set the consumer sees (Python authors, Rust consumes; f64 lives only
+# encode-side).
+ANCHOR_STRUCT = struct.Struct("<Ifffff")
+ANCHOR_BYTES = ANCHOR_STRUCT.size  # 24
+
+
+def serialize_anchors(anchors):
+    """Anchors -> the verbatim SECTION_ZINC_INDEX bytes."""
+    return b"".join(
+        ANCHOR_STRUCT.pack(k.frame, np.float32(k.r), np.float32(k.theta),
+                           np.float32(k.z), np.float32(k.a), np.float32(k.i))
+        for k in anchors
+    )
+
+
+def deserialize_anchors(blob):
+    """SECTION_ZINC_INDEX bytes -> anchors (the consumer's view of the keys)."""
+    if len(blob) % ANCHOR_BYTES:
+        raise ValueError(
+            f"zinc_index length {len(blob)} is not a multiple of {ANCHOR_BYTES}")
+    return [
+        Anchor(frame=f, a=a, i=i, r=r, theta=theta, z=z)
+        for f, r, theta, z, a, i in ANCHOR_STRUCT.iter_unpack(blob)
+    ]
 
 
 @dataclass

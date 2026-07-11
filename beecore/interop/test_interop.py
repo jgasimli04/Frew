@@ -6,6 +6,11 @@ A `.bee` written by either implementation must decode in the other to
   * bit-identical PCM arrays (Layer 1 lossless contract), and
   * a bit-identical Layer-2 side-channel (A, I, chroma, engagement + meta).
 
+Zinc index (T1, ZINC_KEYFRAME_BLUEPRINT §5-6): Python authors the keys, the
+`zinc_index` section carries them verbatim, and the Rust consumer's ZOH
+reconstruction must be bit-exact against `beehive.zinc.reconstruct_state`
+from the same stored keys. Files without the section stay fully readable.
+
 Run:  .venv/bin/python beecore/interop/test_interop.py
 (from the sonoFaig repo root; builds nothing — expects
  beecore/target/release/bee to exist: `cargo build --release`)
@@ -24,7 +29,7 @@ import soundfile as sf
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from beehive import beefile  # noqa: E402
+from beehive import beefile, zinc  # noqa: E402
 from beehive.encode import encode_song  # noqa: E402
 from beehive.record import STORED_FIELDS  # noqa: E402
 
@@ -105,7 +110,45 @@ def run_case(d, name, wav, expect_codec):
     check(f"{name}: Rust reads Layer-2 meta verbatim",
           json.loads(hm_out.read_text()) == record.meta)
 
+    # --- zinc index: Python authors, Rust consumes (T1) ---------------------
+    policy = zinc.ZincPolicy.seeded(record)
+    anchors = zinc.place_anchors(record, policy)
+    # The stored (f32 wire-format) keys are the authoritative set the consumer sees.
+    stored = zinc.deserialize_anchors(zinc.serialize_anchors(anchors))
+
+    zinc_bee = d / f"{name}_py_zinc.bee"
+    beefile.write_bee(zinc_bee, audio_path=str(wav), record=record,
+                      anchors=anchors, zinc_policy=policy)
+    check(f"{name}: Python reloads its own zinc keys",
+          beefile.read_zinc_index(zinc_bee) == stored)
+    check(f"{name}: pre-index .bee has no zinc section",
+          beefile.read_zinc_index(py_bee) is None)
+
+    # additive contract: the extra section changes nothing for the audio path
+    out_pcm_z = d / f"{name}_rust_read_zinc.bin"
+    rust("decode", str(zinc_bee), "--pcm-out", str(out_pcm_z))
+    check(f"{name}: zinc-carrying .bee still decodes PCM bit-exact (Rust)",
+          sha(out_pcm_z.read_bytes()) == truth)
+
+    keys_json = d / f"{name}_keys.json"
+    recon_bin = d / f"{name}_recon.bin"
+    rust("index", str(zinc_bee), "--out", str(keys_json),
+         "--reconstruct-out", str(recon_bin))
+    rk = json.loads(keys_json.read_text())
+    check(f"{name}: Rust reads the authored keys",
+          rk["n_keys"] == len(stored)
+          and [(k["frame"], k["a"], k["i"]) for k in rk["keys"]]
+          == [(k.frame, k.a, k.i) for k in stored])
+
+    a_py, i_py = zinc.reconstruct_state(stored, record.n_frames)
+    expect = np.concatenate([a_py, i_py]).astype(np.float32).tobytes()
+    check(f"{name}: Rust ZOH reconstruction bit-exact vs Python",
+          recon_bin.read_bytes() == expect,
+          f"{len(stored)} keys, {record.n_frames} frames")
+
     # --- core writes, reference reads ---------------------------------------
+    zblob = d / f"{name}_zinc.bin"
+    zblob.write_bytes(zinc.serialize_anchors(anchors))
     (d / f"{name}_pcm.bin").write_bytes(data.tobytes())
     am_in = {k: am[k] for k in
              ("sample_rate", "channels", "subtype", "frames", "dtype",
@@ -120,7 +163,10 @@ def run_case(d, name, wav, expect_codec):
          "--audio-meta", str(d / f"{name}_am.json"),
          "--helix-npz", str(d / f"{name}_h.npz"),
          "--helix-meta", str(d / f"{name}_hm.json"),
+         "--zinc-index", str(zblob),
          "--out", str(rust_bee))
+    check(f"{name}: Python reads zinc keys from Rust-written .bee",
+          beefile.read_zinc_index(rust_bee) == stored)
 
     record2, pcm2 = beefile.read_bee(rust_bee)
     check(f"{name}: Python decodes Rust-written .bee bit-exact",

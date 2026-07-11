@@ -20,6 +20,7 @@ use crate::codec;
 use crate::error::{Error, Result};
 use crate::manifest::{
     AudioMeta, Manifest, Section, SECTION_AUDIO, SECTION_HELIX_ARRAYS, SECTION_HELIX_META,
+    SECTION_ZINC_INDEX,
 };
 use crate::npz::{self, NpyArray};
 use crate::pcm::{Dtype, Pcm};
@@ -38,6 +39,9 @@ pub struct BeeFile {
     pub helix_npz: Vec<u8>,
     /// Layer 2 meta, verbatim JSON bytes.
     pub helix_meta_json: Vec<u8>,
+    /// Python-authored zinc keyframe index, verbatim section bytes (parse with
+    /// `zinc::read_anchors`). None for files written before the section existed.
+    pub zinc_index: Option<Vec<u8>>,
 }
 
 /// Layer 2 unpacked: the stored per-frame state (nothing here reconstructs
@@ -105,12 +109,19 @@ pub fn read_bee_bytes(bytes: &[u8]) -> Result<BeeFile> {
     let audio = section(bytes, blob_start, &manifest.sections, SECTION_AUDIO)?;
     let helix_npz = section(bytes, blob_start, &manifest.sections, SECTION_HELIX_ARRAYS)?;
     let helix_meta = section(bytes, blob_start, &manifest.sections, SECTION_HELIX_META)?;
+    // Additive section: absent in older files, never an error.
+    let zinc_index = if manifest.sections.contains_key(SECTION_ZINC_INDEX) {
+        Some(section(bytes, blob_start, &manifest.sections, SECTION_ZINC_INDEX)?.to_vec())
+    } else {
+        None
+    };
     let pcm = codec::decode_payload(audio, &manifest.audio)?;
     Ok(BeeFile {
         manifest,
         pcm,
         helix_npz: helix_npz.to_vec(),
         helix_meta_json: helix_meta.to_vec(),
+        zinc_index,
     })
 }
 
@@ -174,6 +185,11 @@ pub struct WriteParams<'a> {
     pub audio: AudioMeta,
     pub helix_npz: &'a [u8],
     pub helix_meta_json: &'a [u8],
+    /// Python-authored zinc keys, verbatim section bytes (additive; None omits
+    /// the section — this writer never authors keys, blueprint §5).
+    pub zinc_index: Option<&'a [u8]>,
+    /// Manifest `zinc` summary carried verbatim alongside the section.
+    pub zinc_meta: Option<serde_json::Value>,
     /// Optional ISO-8601 timestamp; defaults to now (UTC).
     pub created_at: Option<String>,
 }
@@ -224,11 +240,15 @@ pub fn write_bee_bytes(p: &WriteParams<'_>) -> Result<(Vec<u8>, Manifest)> {
 
     let mut sections = BTreeMap::new();
     let mut blob = Vec::with_capacity(payload.len() + p.helix_npz.len() + p.helix_meta_json.len());
-    for (name, chunk) in [
+    let mut chunks = vec![
         (SECTION_AUDIO, payload.as_slice()),
         (SECTION_HELIX_ARRAYS, p.helix_npz),
         (SECTION_HELIX_META, p.helix_meta_json),
-    ] {
+    ];
+    if let Some(zi) = p.zinc_index {
+        chunks.push((SECTION_ZINC_INDEX, zi));
+    }
+    for (name, chunk) in chunks {
         sections.insert(
             name.to_string(),
             Section { offset: blob.len() as u64, length: chunk.len() as u64 },
@@ -241,6 +261,7 @@ pub fn write_bee_bytes(p: &WriteParams<'_>) -> Result<(Vec<u8>, Manifest)> {
         created_at: Some(p.created_at.clone().unwrap_or_else(now_iso_utc)),
         audio,
         sidechannel: Some(sidechannel),
+        zinc: p.zinc_meta.clone(),
         sections,
         layers: Some(
             "L1 audio payload reconstructs PCM; L2 helix side-channel = \

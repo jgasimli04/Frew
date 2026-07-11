@@ -57,6 +57,16 @@ from meta as fact, reconstruct trajectory), roundtrip test, interop test
 bit-exact vs `beehive.zinc.reconstruct_state`. Old readers unaffected (verified:
 Rust fetches sections by name and ignores extras). **DoD:** `.bee` carries keys;
 `cargo test` + interop green.
+**DONE 2026-07-11.** DoD passed: interop 42/42 (7 zinc checks × 3 codec paths:
+keys carried verbatim both write directions, Rust ZOH reconstruction
+byte-identical to `beehive.zinc.reconstruct_state`, pre-index files read as
+no-index), `cargo test` 11/11 (wire layout pinned byte-for-byte, additive
+old-file case), `pytest` 25/25. Real-track check (Good Lies, FLAC source):
+322 keys authored encode-time, 21.4× sparsity, 7,728 B index = 2.8 KB/min,
+Rust reconstruction byte-identical. Keys are authored on the live float64
+state at encode time — placement re-run on the stored float32 side-channel
+gives 300 keys, not 322 (ZINC_AMBIENT_FINDINGS §5) — so the baked wire keys
+are the single authoritative set; no consumer ever re-places.
 
 **T2 — AV Stage v0 (STARTED TODAY).** In `BeehiveMac/BeehiveApp`: a Stage window
 that plays the loaded `.bee` while compositing (a) the inspiration-set video

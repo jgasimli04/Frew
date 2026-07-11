@@ -28,6 +28,7 @@ pub mod error;
 pub mod manifest;
 pub mod npz;
 pub mod pcm;
+pub mod zinc;
 
 pub use container::{
     bee_info, read_bee, read_bee_bytes, write_bee, write_bee_bytes, BeeFile, Sidechannel,
