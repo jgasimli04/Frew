@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "BeehiveMac",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     products: [
         .library(name: "BeehiveKit", targets: ["BeehiveKit"]),
         .executable(name: "BeehiveApp", targets: ["BeehiveApp"]),

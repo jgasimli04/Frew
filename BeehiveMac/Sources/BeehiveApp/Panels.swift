@@ -6,7 +6,7 @@ import SwiftUI
 struct EnergyView: View {
     let record: HelixRecord
     let peaks: [(time: Double, fmag: Double)]
-    var cursor: Int
+    var playhead: Double          // fractional frame — glides at display rate
     var onScrub: (Double) -> Void = { _ in }
 
     var body: some View {
@@ -39,8 +39,8 @@ struct EnergyView: View {
                 }
 
                 // playhead
-                let ci = min(max(cursor, 0), n - 1)
-                let cx = size.width * CGFloat(ci) / CGFloat(n - 1)
+                let cf = min(max(playhead, 0), Double(n - 1))
+                let cx = size.width * CGFloat(cf / Double(n - 1))
                 var pl = Path(); pl.move(to: CGPoint(x: cx, y: 0)); pl.addLine(to: CGPoint(x: cx, y: size.height))
                 ctx.stroke(pl, with: .color(.cyan), lineWidth: 1.5)
             }
@@ -57,7 +57,7 @@ struct EnergyView: View {
 /// playhead cursor.
 struct HueStripView: View {
     let record: HelixRecord
-    var cursor: Int
+    var playhead: Double          // fractional frame — glides at display rate
 
     var body: some View {
         Canvas { ctx, size in
@@ -73,7 +73,7 @@ struct HueStripView: View {
                 ctx.fill(Path(rect), with: .color(col))
             }
             if n > 1 {
-                let cx = size.width * CGFloat(min(max(cursor, 0), n - 1)) / CGFloat(n - 1)
+                let cx = size.width * CGFloat(min(max(playhead, 0), Double(n - 1)) / Double(n - 1))
                 var pl = Path(); pl.move(to: CGPoint(x: cx, y: 0)); pl.addLine(to: CGPoint(x: cx, y: size.height))
                 ctx.stroke(pl, with: .color(.white), lineWidth: 1.5)
             }

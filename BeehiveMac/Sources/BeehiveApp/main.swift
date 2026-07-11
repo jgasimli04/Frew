@@ -2,7 +2,8 @@ import BeehiveKit
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var model = AppModel()
+    @EnvironmentObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         NavigationSplitView {
@@ -35,6 +36,14 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
+                Button {
+                    openWindow(id: "stage")
+                } label: {
+                    Label("Stage", systemImage: "sparkles.tv")
+                }
+                .help("Open the AV stage — inspiration clips + the helix overlay")
+            }
+            ToolbarItem(placement: .automatic) {
                 HStack(spacing: 6) {
                     if model.busy { ProgressView().controlSize(.small) }
                     Text(model.status).font(.caption).foregroundColor(.secondary)
@@ -51,18 +60,19 @@ struct ContentView: View {
     private func stage(_ r: HelixRecord) -> some View {
         VStack(spacing: 0) {
             HelixSceneView(record: r,
-                           cursor: model.safeCursor,
+                           cursor: model.playheadFrame,
                            autoSpin: model.autoSpin,
-                           camera: model.camera)
+                           camera: model.camera,
+                           env: model.bandEnv)
                 .frame(minHeight: 280)
                 .layoutPriority(1)
                 .overlay(alignment: .topTrailing) { CameraControls(model: model).padding(10) }
                 .overlay(alignment: .bottomLeading) { CompressionChip(record: r).padding(10) }
 
-            EnergyView(record: r, peaks: model.peakMoments(), cursor: model.safeCursor,
+            EnergyView(record: r, peaks: model.peakMoments(), playhead: model.playheadFrame,
                        onScrub: { model.scrub(toFraction: $0) })
                 .frame(height: 84)
-            HueStripView(record: r, cursor: model.safeCursor)
+            HueStripView(record: r, playhead: model.playheadFrame)
                 .frame(height: 16)
             scrubber(r)
         }
@@ -82,10 +92,10 @@ struct ContentView: View {
             .keyboardShortcut(.space, modifiers: [])
             .help(model.isBee ? "Play the .bee Layer-1 payload (decoded by the native core)"
                               : "Play via AVFoundation — the level-matched control chain for A/B against a .bee")
-            Text(mmsscs(r.t[model.safeCursor]))
+            Text(mmsscs(model.playheadSeconds))
                 .font(.caption.monospaced()).foregroundColor(.cyan)
                 .frame(width: 66, alignment: .leading)
-            Slider(value: Binding(get: { Double(model.safeCursor) },
+            Slider(value: Binding(get: { model.playheadFrame },
                                   set: { model.setCursor(Int($0.rounded())) }),
                    in: 0...Double(max(r.nFrames - 1, 1)))
             Text(mmss(r.meta.durationS))
@@ -171,11 +181,22 @@ private struct CompressionChip: View {
 }
 
 struct BeehiveApplication: App {
+    @StateObject private var model = AppModel()
+
     var body: some Scene {
         WindowGroup("Beehive") {
-            ContentView().preferredColorScheme(.dark)
+            ContentView()
+                .environmentObject(model)
+                .preferredColorScheme(.dark)
         }
         .defaultSize(width: 1180, height: 760)
+
+        Window("Stage", id: "stage") {
+            StageView()
+                .environmentObject(model)
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 1000, height: 640)
     }
 }
 

@@ -18,9 +18,10 @@ private struct HelixScaling {
 /// timbre (chroma hue). Drag to orbit/zoom; the glowing bead is the playhead.
 struct HelixSceneView: NSViewRepresentable {
     let record: HelixRecord
-    var cursor: Int
+    var cursor: Double            // fractional frame — the bead glides between vertices
     var autoSpin: Bool
     var camera: CameraCommand
+    var env: BandEnvelopes?       // live 5-band energy — makes the coil breathe
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -29,6 +30,8 @@ struct HelixSceneView: NSViewRepresentable {
         v.allowsCameraControl = true            // free orbit + scroll/pinch zoom
         v.backgroundColor = .black
         v.antialiasingMode = .multisampling4X
+        // render at the panel's full rate — 120 Hz on ProMotion displays
+        v.preferredFramesPerSecond = NSScreen.main?.maximumFramesPerSecond ?? 120
         let c = context.coordinator
         c.scene.background.contents = NSColor.black
         v.scene = c.scene
@@ -38,6 +41,7 @@ struct HelixSceneView: NSViewRepresentable {
         c.rebuild(record: record)
         c.applySpin(autoSpin)
         c.moveMarker(to: cursor, record: record)
+        c.applyAudio(cursor: cursor, env: env)
         c.apply(camera: camera, animated: false)
         return v
     }
@@ -47,6 +51,7 @@ struct HelixSceneView: NSViewRepresentable {
         if c.songId != record.meta.songId { c.rebuild(record: record) }
         c.applySpin(autoSpin)
         c.moveMarker(to: cursor, record: record)
+        c.applyAudio(cursor: cursor, env: env)
         c.apply(camera: camera, animated: true)
     }
 
@@ -64,6 +69,11 @@ struct HelixSceneView: NSViewRepresentable {
         init() {
             cameraNode.camera = SCNCamera()
             cameraNode.camera?.zFar = 500
+            // HDR bloom: the strands glow into the surrounding black on the highs
+            cameraNode.camera?.wantsHDR = true
+            cameraNode.camera?.bloomThreshold = 0.4
+            cameraNode.camera?.bloomBlurRadius = 12
+            cameraNode.camera?.bloomIntensity = 0.2
             cameraNode.position = SCNVector3(24, -22, 22)
 
             let sphere = SCNSphere(radius: 0.42)
@@ -121,12 +131,43 @@ struct HelixSceneView: NSViewRepresentable {
             helixNode.addChildNode(markerNode)
         }
 
-        func moveMarker(to cursor: Int, record r: HelixRecord) {
+        func moveMarker(to cursor: Double, record r: HelixRecord) {
             let n = r.nFrames
             guard n > 0 else { markerNode.isHidden = true; return }
             markerNode.isHidden = false
-            let i = min(max(cursor, 0), n - 1)
-            markerNode.position = scaling.point(x: r.x[i], y: r.y[i], h: r.h[i])
+            let f = min(max(cursor, 0), Double(n - 1))
+            let i = Int(f), j = min(i + 1, n - 1)
+            let u = f - Double(i)
+            markerNode.position = scaling.point(x: r.x[i] + (r.x[j] - r.x[i]) * u,
+                                                y: r.y[i] + (r.y[j] - r.y[i]) * u,
+                                                h: r.h[i] + (r.h[j] - r.h[i]) * u)
+        }
+
+        /// Per-frame live reaction to the music, sampled at the playhead. The whole
+        /// coil breathes (x/y scale) with the low bands, the strands bloom on the
+        /// highs, and everything deflates + dims on the bass-departure drop. Same
+        /// `inflate` shape as the 2D stage overlay (StageView) so they agree.
+        func applyAudio(cursor: Double, env: BandEnvelopes?) {
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0        // track the frame, don't lag
+            defer { SCNTransaction.commit() }
+
+            guard let env else {                        // no analysis yet → rest state
+                helixNode.scale = SCNVector3(1, 1, 1)
+                cameraNode.camera?.bloomIntensity = 0.2
+                helixNode.geometry?.firstMaterial?.transparency = 1
+                return
+            }
+
+            let bands = env.values(at: cursor)
+            let drop = CGFloat(env.drop(at: cursor))
+            let sub = CGFloat(bands[0]), low = CGFloat(bands[1])
+            let hiMid = CGFloat(bands[3]), hi = CGFloat(bands[4])
+
+            let inflate = (0.78 + 0.34 * (0.45 * sub + 0.55 * low)) * (1 - 0.45 * drop)
+            helixNode.scale = SCNVector3(inflate, inflate, 1)
+            cameraNode.camera?.bloomIntensity = 0.2 + 2.0 * max(hi, hiMid)
+            helixNode.geometry?.firstMaterial?.transparency = 1 - 0.45 * drop
         }
 
         func applySpin(_ on: Bool) {

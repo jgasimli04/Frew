@@ -10,6 +10,8 @@ kernel/target/
 
 # swift
 BeehiveMac/.build/
+# packaged app + iconset renders (rebuild: BeehiveMac/scripts/make_app.sh / make_icon.swift)
+BeehiveMac/dist/
 
 # test/bench scratch outputs
 beecore/interop/.tmp/
