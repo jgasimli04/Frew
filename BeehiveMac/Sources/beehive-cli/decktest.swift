@@ -271,7 +271,8 @@ func decktest() {
         bd_deck_set_fx_amount(d, 0.7)
         _ = render(Int(0.3 * sr))                    // settle
         var worstStep = 0.0
-        for ty in [BD_FX_ECHO, BD_FX_DUCK, BD_FX_ROLL, BD_FX_REVERSE, BD_FX_DRIVE] {
+        for ty in [BD_FX_ECHO, BD_FX_DUCK, BD_FX_ROLL, BD_FX_REVERSE, BD_FX_DRIVE,
+                   BD_FX_SWEEP, BD_FX_FLANGER, BD_FX_PHASER, BD_FX_SLICER, BD_FX_REVERB] {
             bd_deck_set_fx(d, Int32(ty), Int32(BD_FXT_ALL), true)
             let (a, _) = render(Int(0.6 * sr))
             bd_deck_set_fx(d, Int32(ty), Int32(BD_FXT_ALL), false)
@@ -283,7 +284,7 @@ func decktest() {
         }
         print(String(format: "  FX engage/bypass: worst step %.4f vs clean sine %.4f (×%.2f)",
                      worstStep, natural, worstStep / natural))
-        check(worstStep < 2.5 * natural, "all five FX engage and bypass click-free (DoD)")
+        check(worstStep < 2.5 * natural, "all ten FX engage and bypass click-free (DoD)")
         bd_mixer_free(m); bd_deck_free(d)
     }
 
@@ -394,6 +395,103 @@ func decktest() {
         let crest = peak / rms(L[...])
         print(String(format: "  drive: crest factor %.3f (clean sine 1.414 → square 1.0)", crest))
         check(crest < 1.15, "waveshaper squares the sine (crest < 1.15)")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
+    // ---- 14. SWEEP: resonant LP rides φ — closed on the beat, open mid-cycle
+    do {
+        let (d, m, render) = rig(sine(6000, seconds: 5.0))
+        bd_deck_set_grid(d, beat, 0)
+        bd_deck_set_fx(d, Int32(BD_FX_SWEEP), Int32(BD_FXT_ALL), true)
+        bd_deck_set_fx_beats(d, 1)
+        bd_deck_set_fx_amount(d, 0.5)
+        let (L, _) = render(Int(4.0 * sr))
+        let w = Int(0.02 * sr)
+        let clean = rms(sine(6000, seconds: 1.0)[0..<(2 * w)])
+        var closedDb = 0.0, openDb = 0.0
+        for k in 3...5 {
+            let c = Int(Double(k) * beat), o = c + Int(beat / 2)
+            closedDb += db(rms(L[(c - w)..<(c + w)]) / clean) / 3
+            openDb += db(rms(L[(o - w)..<(o + w)]) / clean) / 3
+        }
+        print(String(format: "  sweep: 6 kHz %.1f dB at φ=0 (fc 200 Hz) · %+.1f dB at φ=0.5 (open)",
+                     closedDb, openDb))
+        check(closedDb < -25, "sweep closes ≥25 dB on the beat")
+        check(openDb > -4, "sweep opens by mid-cycle (>-4 dB)")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
+    // ---- 15/16. FLANGER and PHASER: φ-swept notch modulates a 1 kHz tone ----
+    for (name, ty, minRange) in [("flanger", BD_FX_FLANGER, 6.0), ("phaser", BD_FX_PHASER, 4.0)] {
+        let (d, m, render) = rig(sine(1000, seconds: 6.0))
+        bd_deck_set_grid(d, beat, 0)
+        bd_deck_set_fx(d, Int32(ty), Int32(BD_FXT_ALL), true)
+        bd_deck_set_fx_beats(d, 2)                   // one full LFO per 2 beats
+        bd_deck_set_fx_amount(d, 1.0)
+        _ = render(Int(1.0 * sr))                    // settle
+        let cyc = Int(2 * beat)
+        let (L, _) = render(2 * cyc)
+        var lo = Double.infinity, hi = -Double.infinity
+        let win = cyc / 20
+        for k in 0..<(2 * cyc / win) {
+            let v = db(rms(L[(k * win)..<((k + 1) * win)]))
+            lo = min(lo, v); hi = max(hi, v)
+        }
+        print(String(format: "  %@: 1 kHz level swings %.1f dB across the θ cycle", name, hi - lo))
+        check(hi - lo > minRange, "\(name) notch sweeps through the tone (≥\(Int(minRange)) dB swing)")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
+    // ---- 17. SLICER re-sequences the previous cycle -------------------------
+    // Input: 8 slices per beat with staircase amplitude (slice s → (s+1)/8).
+    // Pattern at amount 0 = [0,0,2,2,4,4,6,6]; output slice rms must follow
+    // the *pattern's* source slices, not the live input.
+    do {
+        let n = Int(5 * sr)
+        let slice = beat / 8.0
+        let base = sine(500, seconds: 5.0, amp: 1.0)
+        let track = (0..<n).map { i -> Float in
+            let s = Int(Double(i).truncatingRemainder(dividingBy: beat) / slice) & 7
+            return base[i] * Float(s + 1) / 8.0
+        }
+        let (d, m, render) = rig(track)
+        bd_deck_set_grid(d, beat, 0)
+        bd_deck_set_fx(d, Int32(BD_FX_SLICER), Int32(BD_FXT_ALL), true)
+        bd_deck_set_fx_beats(d, 1)
+        bd_deck_set_fx_amount(d, 0.0)
+        let (L, _) = render(Int(4.0 * sr))
+        let pat = [0, 0, 2, 2, 4, 4, 6, 6]
+        var okSlices = 0
+        let cyc0 = Int(2 * beat)                     // settled cycle
+        for s in 0..<8 {
+            let a = cyc0 + Int((Double(s) + 0.25) * slice)
+            let b = cyc0 + Int((Double(s) + 0.75) * slice)
+            let got = rms(L[a..<b])
+            let want = Double(pat[s] + 1) / 8.0 * rms(base[0..<Int(slice / 2)])
+            if abs(db(got / want)) < 1.5 { okSlices += 1 }
+        }
+        print("  slicer: \(okSlices)/8 output slices match pattern [0,0,2,2,4,4,6,6] within 1.5 dB")
+        check(okSlices == 8, "SLICER replays the previous cycle in pattern order")
+        bd_mixer_free(m); bd_deck_free(d)
+    }
+
+    // ---- 18. REVERB: tail rings past the dry and decays ----------------------
+    do {
+        var track = [Float](repeating: 0, count: Int(6 * sr))
+        for i in 0..<Int(0.05 * sr) { track[Int(1.0 * sr) + i] = sine(800, seconds: 0.1)[i] }  // 50 ms burst at t=1
+        let (d, m, render) = rig(track)
+        bd_deck_set_grid(d, beat, 0)
+        bd_deck_set_fx(d, Int32(BD_FX_REVERB), Int32(BD_FXT_ALL), true)
+        bd_deck_set_fx_amount(d, 1.0)                // RT60 ≈ 2.2 s
+        let (L, _) = render(Int(4.0 * sr))
+        let t1 = db(rms(L[Int(1.6 * sr)..<Int(1.9 * sr)]))
+        let t2 = db(rms(L[Int(2.5 * sr)..<Int(2.8 * sr)]))
+        let floor0 = db(rms(L[Int(0.3 * sr)..<Int(0.8 * sr)]))
+        print(String(format: "  reverb: tail %.1f dB @1.75 s · %.1f dB @2.65 s (pre-burst floor %.1f dB)",
+                     t1, t2, floor0))
+        check(t1 > -60 && t1 < -10, "tail is audible 0.6 s after a 50 ms burst")
+        check(t2 < t1 - 3, "tail decays monotonically (≥3 dB per 0.9 s at RT60 2.2 s)")
+        check(floor0 == -Double.infinity || floor0 < -80, "silence before the burst stays silent")
         bd_mixer_free(m); bd_deck_free(d)
     }
 

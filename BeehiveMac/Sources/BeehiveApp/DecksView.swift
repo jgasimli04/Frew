@@ -227,7 +227,8 @@ final class DeckSession: ObservableObject {
         pushFX(d)
     }
     func cycleFXType(_ d: Int) {
-        let all: [DeckEngine.FXType] = [.echo, .duck, .roll, .reverse, .drive]
+        let all: [DeckEngine.FXType] = [.echo, .duck, .roll, .reverse, .drive,
+                                        .sweep, .flanger, .phaser, .slicer, .reverb]
         let next = all[((all.firstIndex(of: deck[d].fxType) ?? -1) + 1) % all.count]
         deck[d].fxType = next
         pushFX(d)
@@ -476,7 +477,8 @@ private struct DeckPane: View {
             Text("FX").font(.caption2.bold())
                 .foregroundColor(ui.fxOn ? accent : .secondary)
             HStack(spacing: 3) {
-                ForEach([DeckEngine.FXType.echo, .duck, .roll, .reverse, .drive], id: \.self) { t in
+                ForEach([DeckEngine.FXType.echo, .duck, .roll, .reverse, .drive,
+                         .sweep, .flanger, .phaser, .slicer, .reverb], id: \.self) { t in
                     fxChip(t.label, active: ui.fxType == t && ui.fxOn) {
                         session.selectFX(d, t)
                     }

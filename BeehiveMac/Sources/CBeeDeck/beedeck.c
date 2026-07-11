@@ -179,6 +179,14 @@ struct BDDeck {
     int rel_state;               /* 0 idle · 1 held · 2 tail ringing out */
     float rel_in_g, rel_dry_g, rel_wet_g;
     float rel_blockpeak;
+
+    /* second-wave FX state */
+    Ring fl;                     /* flanger delay line (~20 ms) */
+    Biquad sweep_bq[2];          /* θ-swept resonant LP, redesigned per block */
+    Biquad phz_bq[4];            /* 4-stage phaser allpass chain */
+    float phz_fb[2];
+    Ring rv_cmb[4], rv_ap[2];    /* Schroeder reverb */
+    int rv_cD[4], rv_aD[2];
 };
 
 BDDeck *bd_deck_new(double sample_rate)
@@ -213,6 +221,17 @@ BDDeck *bd_deck_new(double sample_rate)
     ring_init(&d->echo, (int)(8.0 * sample_rate));
     ring_init(&d->cap,  (int)(8.0 * sample_rate));
     ring_init(&d->rel,  (int)(2.0 * sample_rate));
+    ring_init(&d->fl,   (int)(0.02 * sample_rate) + 64);
+    /* Schroeder delays (ms), comb feedback set per block from RT60 */
+    { const double cms[4] = { 29.7, 37.1, 41.1, 43.7 }, ams[2] = { 5.0, 1.7 };
+      for (int k = 0; k < 4; k++) {
+          d->rv_cD[k] = (int)(cms[k] * 1e-3 * sample_rate);
+          ring_init(&d->rv_cmb[k], d->rv_cD[k] + 8);
+      }
+      for (int a = 0; a < 2; a++) {
+          d->rv_aD[a] = (int)(ams[a] * 1e-3 * sample_rate);
+          ring_init(&d->rv_ap[a], d->rv_aD[a] + 8);
+      } }
     atomic_store(&d->fx_target, BD_FXT_ALL);
     atomic_store(&d->fx_beats, 1.0);
     atomic_store(&d->fx_amount, 0.5f);
@@ -226,6 +245,9 @@ void bd_deck_free(BDDeck *d)
 {
     if (!d) return;
     ring_free(&d->echo); ring_free(&d->cap); ring_free(&d->rel);
+    ring_free(&d->fl);
+    for (int k = 0; k < 4; k++) ring_free(&d->rv_cmb[k]);
+    for (int a = 0; a < 2; a++) ring_free(&d->rv_ap[a]);
     free(d->chan[0]); free(d->chan[1]);
     free(d);
 }
@@ -258,6 +280,12 @@ void bd_deck_load(BDDeck *d, const float *left, const float *right,
     /* FX render state restarts with the track (render is gated by `loaded`
      * while we touch the rings here) */
     ring_clear(&d->echo); ring_clear(&d->cap); ring_clear(&d->rel);
+    ring_clear(&d->fl);
+    for (int k = 0; k < 4; k++) ring_clear(&d->rv_cmb[k]);
+    for (int a = 0; a < 2; a++) ring_clear(&d->rv_ap[a]);
+    for (int k = 0; k < 2; k++) bq_reset(&d->sweep_bq[k]);
+    for (int k = 0; k < 4; k++) bq_reset(&d->phz_bq[k]);
+    d->phz_fb[0] = d->phz_fb[1] = 0;
     d->fx_wet_g = 0; d->fx_was_on = false;
     d->echo_D = 0; d->rel_D = 0;
     d->last_phi = 0; d->phi_free = 0;
@@ -333,7 +361,7 @@ void bd_deck_set_grid(BDDeck *d, double beat_samples, double beat0_sample)
 
 void bd_deck_set_fx(BDDeck *d, int type, int target, bool on)
 {
-    if (type < BD_FX_OFF || type > BD_FX_DRIVE) type = BD_FX_OFF;
+    if (type < BD_FX_OFF || type > BD_FX_REVERB) type = BD_FX_OFF;
     if (target < BD_FXT_LOW || target > BD_FXT_ALL) target = BD_FXT_ALL;
     atomic_store(&d->fx_type, type);
     atomic_store(&d->fx_target, target);
@@ -556,6 +584,7 @@ static void deck_render(BDDeck *d, int32_t n)
         d->fx_wet_g = 0.0f;
         d->roll_len = 0;
         d->echo_D = cyc_out;
+        d->phz_fb[0] = d->phz_fb[1] = 0.0f;
     }
     if (d->echo_D <= 0) d->echo_D = cyc_out;
     if (d->rel_D <= 0) d->rel_D = cyc_out;
@@ -573,6 +602,43 @@ static void deck_render(BDDeck *d, int32_t n)
     float drive_g = 1.0f + 24.0f * fx_amt;
     float drive_norm = 1.0f / tanhf(drive_g);
     float drive_mix = fx_amt < 0.83f ? fx_amt * 1.2f : 1.0f;
+
+    /* φ at the block start, for the block-rate LFO designs (sweep/phaser) */
+    double blk_phi;
+    if (bsrc > 0) {
+        double p = (d->posb[0] - b0) / (cyc_src > 0 ? cyc_src : 1.0);
+        blk_phi = p - floor(p);
+    } else blk_phi = d->phi_free;
+    if (d->cur_type == BD_FX_SWEEP) {
+        /* cutoff rides φ: 200 Hz at the beat, opens to 20 kHz mid-cycle;
+         * amount = resonance */
+        double s = 0.5 - 0.5 * cos(2.0 * M_PI * blk_phi);
+        double fc = 200.0 * pow(100.0, s);
+        double Q = 0.8 + 6.0 * (double)fx_amt;
+        bq_design(&d->sweep_bq[0], BQ_LP, fc, sr, Q);   /* design leaves z state */
+        bq_design(&d->sweep_bq[1], BQ_LP, fc, sr, Q);
+    }
+    if (d->cur_type == BD_FX_PHASER) {
+        double s = 0.5 + 0.5 * cos(2.0 * M_PI * blk_phi);
+        double fc = 300.0 * pow(10.0, s);              /* 300 Hz … 3 kHz */
+        for (int k = 0; k < 4; k++)
+            bq_design(&d->phz_bq[k], BQ_AP, fc, sr, 0.6);
+    }
+    float phz_fbamt = 0.7f * fx_amt;
+    /* reverb comb feedback from RT60 = 0.4 + 1.8·amount seconds */
+    float rv_g[4], rv_wet = 0.3f + 0.4f * fx_amt;
+    { double rt = 0.4 + 1.8 * (double)fx_amt;
+      for (int k = 0; k < 4; k++)
+          rv_g[k] = (float)pow(10.0, -3.0 * (double)d->rv_cD[k] / (rt * sr)); }
+    /* slicer patterns: which source slice (of 8) plays in each output slot;
+     * amount quartiles pick the pattern */
+    static const int sl_pat[4][8] = {
+        { 0, 0, 2, 2, 4, 4, 6, 6 },    /* stutter halves      */
+        { 0, 1, 0, 1, 4, 5, 4, 5 },    /* pair repeats        */
+        { 0, 4, 1, 5, 2, 6, 3, 7 },    /* interleave          */
+        { 7, 6, 5, 4, 3, 2, 1, 0 },    /* backwards bar       */
+    };
+    const int *slp = sl_pat[fx_amt < 0.25f ? 0 : fx_amt < 0.5f ? 1 : fx_amt < 0.75f ? 2 : 3];
     float wet_tgt = fx_on ? 1.0f : 0.0f;
     float mtgt[BD_BANDS];                          /* band → wet-bus mask */
     for (int b = 0; b < BD_BANDS; b++) {
@@ -676,6 +742,73 @@ static void deck_render(BDDeck *d, int32_t n)
                 float m = drive_mix * wg;
                 owl = wl * (1.0f - m) + tanhf(drive_g * wl) * drive_norm * m;
                 owr = wr * (1.0f - m) + tanhf(drive_g * wr) * drive_norm * m;
+                break;
+            }
+            case BD_FX_SWEEP: {
+                float fl2 = bq_tick(&d->sweep_bq[1], 0, bq_tick(&d->sweep_bq[0], 0, wl));
+                float fr2 = bq_tick(&d->sweep_bq[1], 1, bq_tick(&d->sweep_bq[0], 1, wr));
+                owl = wl * (1.0f - wg) + fl2 * wg;
+                owr = wr * (1.0f - wg) + fr2 * wg;
+                break;
+            }
+            case BD_FX_FLANGER: {
+                /* delay 0.5–8.5 ms riding φ; comb notches sweep each cycle */
+                double D = (0.0005 + 0.002 * (1.0 + cos(2.0 * M_PI * phi))) * sr;
+                float tl = ring_tap(&d->fl, 0, D);
+                float tr = ring_tap(&d->fl, 1, D);
+                ring_push(&d->fl, wl + tl * 0.55f * fx_amt * wg,
+                                  wr + tr * 0.55f * fx_amt * wg);
+                owl = wl + tl * 0.7f * wg;
+                owr = wr + tr * 0.7f * wg;
+                break;
+            }
+            case BD_FX_PHASER: {
+                float xl = wl + d->phz_fb[0] * phz_fbamt * wg;
+                float xr = wr + d->phz_fb[1] * phz_fbamt * wg;
+                for (int k = 0; k < 4; k++) {
+                    xl = bq_tick(&d->phz_bq[k], 0, xl);
+                    xr = bq_tick(&d->phz_bq[k], 1, xr);
+                }
+                d->phz_fb[0] = xl; d->phz_fb[1] = xr;
+                owl = wl + xl * 0.7f * wg;
+                owr = wr + xr * 0.7f * wg;
+                break;
+            }
+            case BD_FX_SLICER:
+                if (d->wrap_prev_len > 15) {
+                    double sl8 = phi * 8.0;
+                    int slot = (int)sl8 & 7;
+                    double frac8 = sl8 - (double)slot;
+                    double slice = (double)d->wrap_prev_len / 8.0;
+                    int idx = d->wrap_prev_start
+                            + (int)(((double)slp[slot] + frac8) * slice);
+                    float rl = ring_at(&d->cap, 0, idx);
+                    float rr2 = ring_at(&d->cap, 1, idx);
+                    owl = wl * (1.0f - wg) + rl * wg;
+                    owr = wr * (1.0f - wg) + rr2 * wg;
+                }
+                break;
+            case BD_FX_REVERB: {
+                float accl = 0.0f, accr = 0.0f;
+                for (int k = 0; k < 4; k++) {
+                    Ring *c = &d->rv_cmb[k];
+                    float yl = ring_at(c, 0, c->w - d->rv_cD[k]);
+                    float yr = ring_at(c, 1, c->w - d->rv_cD[k]);
+                    accl += yl; accr += yr;
+                    ring_push(c, wl + yl * rv_g[k], wr + yr * rv_g[k]);
+                }
+                accl *= 0.25f; accr *= 0.25f;
+                for (int a = 0; a < 2; a++) {          /* Schroeder allpasses */
+                    Ring *p = &d->rv_ap[a];
+                    float bl = ring_at(p, 0, p->w - d->rv_aD[a]);
+                    float br = ring_at(p, 1, p->w - d->rv_aD[a]);
+                    float ol = -0.7f * accl + bl;
+                    float orr = -0.7f * accr + br;
+                    ring_push(p, accl + 0.7f * ol, accr + 0.7f * orr);
+                    accl = ol; accr = orr;
+                }
+                owl = wl + accl * rv_wet * wg;
+                owr = wr + accr * rv_wet * wg;
                 break;
             }
             default:

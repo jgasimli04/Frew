@@ -75,8 +75,34 @@ loop.
 - Release repeats are capped at the 2 s release ring (fine down to 30 bpm at
   the default ≤ 1-beat fractions).
 
+## Second wave (same day): SWEEP · FLANGER · PHASER · SLICER · REVERB
+
+The catalog completed to ten effects. The φ-driven ones again needed no clock
+of their own — SWEEP and PHASER redesign their biquads once per render block
+from φ; FLANGER's LFO *is* φ; SLICER re-sequences the previous cycle straight
+off the same capture ring ROLL/REVERSE use. REVERB is the one true new
+primitive (Schroeder: 4 combs + 2 allpasses, amount = RT60 0.4–2.2 s).
+
+Measured (decktest 14–18, same run as above):
+
+- **SWEEP** (resonant LP, cutoff 200 Hz→20 kHz riding φ, amount = Q):
+  6 kHz tone **−42.8 dB at φ=0, +0.1 dB at φ=0.5**.
+- **FLANGER** (0.5–8.5 ms delay riding φ, feedback ≤0.55): 1 kHz level swings
+  **10.1 dB** across the θ cycle.
+- **PHASER** (4-stage allpass, 300 Hz–3 kHz, feedback ≤0.7): **11.0 dB** swing.
+- **SLICER** (previous θ-cycle, 8 slices, amount picks 1 of 4 patterns):
+  staircase input re-sequenced — **8/8 output slices** match pattern
+  `[0,0,2,2,4,4,6,6]` within 1.5 dB.
+- **REVERB** (amount 1 → RT60 ≈ 2.2 s): 50 ms burst → tail **−34.0 dB** 0.6 s
+  later, **−58.1 dB** at +1.5 s (monotonic), and the pre-burst floor is exact
+  silence (−inf).
+- **Engage/bypass across all ten types: unchanged worst step 1.81×** a clean
+  sine's slope — the click-free DoD holds for the full catalog.
+- Block-rate LFO note: SWEEP/PHASER coefficients update per render block
+  (≤512 frames ≈ 11.6 ms) — standard practice; no zipper audible in the click
+  test.
+
 ## Still open in T5
 
-Reverb, flanger, phaser, filter sweep, slicer patterns, master-bus FX; UI
-shows no per-effect sub-parameter yet (one AMOUNT knob maps to
-feedback/depth/drive).
+Master-bus FX (everything is per-deck) and per-effect sub-parameters (one
+AMOUNT knob maps to feedback / depth / drive / resonance / pattern / RT60).
