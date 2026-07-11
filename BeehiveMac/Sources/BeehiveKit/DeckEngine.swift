@@ -304,11 +304,14 @@ public final class DeckEngine {
     /// time is the beat fraction (tape-style glide on changes); DRIVE is a
     /// waveshaper. See `beedeck.h` for the DSP contract.
     public enum FXType: Int32, CaseIterable {
-        case off = 0, echo, duck, roll, reverse, drive
+        case off = 0, echo, duck, roll, reverse, drive,
+             sweep, flanger, phaser, slicer, reverb
         public var label: String {
             switch self {
             case .off: "OFF"; case .echo: "ECHO"; case .duck: "DUCK"
-            case .roll: "ROLL"; case .reverse: "REV"; case .drive: "DRIVE"
+            case .roll: "ROLL"; case .reverse: "REV"; case .drive: "DRV"
+            case .sweep: "SWP"; case .flanger: "FLG"; case .phaser: "PHZ"
+            case .slicer: "SLC"; case .reverb: "VRB"
             }
         }
     }

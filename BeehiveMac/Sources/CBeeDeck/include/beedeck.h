@@ -41,8 +41,14 @@ extern "C" {
 
 enum { BD_BANDS = 5, BD_HOT_CUES = 8 };
 
-/* Beat FX types and band targets (see the header comment). */
-enum { BD_FX_OFF = 0, BD_FX_ECHO, BD_FX_DUCK, BD_FX_ROLL, BD_FX_REVERSE, BD_FX_DRIVE };
+/* Beat FX types and band targets (see the header comment). Second wave:
+ * SWEEP = θ-synced resonant low-pass (cutoff rides φ, amount = resonance),
+ * FLANGER/PHASER = φ-driven LFOs (delay line / 4-stage allpass), SLICER =
+ * previous-cycle slice re-sequencer over the capture ring (amount picks the
+ * pattern), REVERB = Schroeder (4 comb + 2 allpass, amount = RT60). */
+enum { BD_FX_OFF = 0, BD_FX_ECHO, BD_FX_DUCK, BD_FX_ROLL, BD_FX_REVERSE,
+       BD_FX_DRIVE, BD_FX_SWEEP, BD_FX_FLANGER, BD_FX_PHASER, BD_FX_SLICER,
+       BD_FX_REVERB };
 enum { BD_FXT_LOW = 0, BD_FXT_MID, BD_FXT_HI, BD_FXT_ALL };
 
 typedef struct BDDeck BDDeck;
