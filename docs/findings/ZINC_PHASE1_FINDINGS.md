@@ -1,4 +1,4 @@
-# Zinc-Finger Keyframe — Phase 1 Findings
+# Zinc Keyframe — Phase 1 Findings
 
 **Date: 2026-07-10.** Key generator: `beehive/zinc.py`. Reproduce:
 `.venv/bin/python scripts/zinc_report.py`. Corpus: the three real library tracks
@@ -15,7 +15,7 @@ generator** (authoritative); Rust will consume its output (Phase 3).
 2. **Anchors track `‖F‖`.** Anchor rate rises monotonically across `‖F‖`
    deciles (low→high force): Liverpool 6.8%→79.5%, Good Lies 25.5%→86.8%, Night
    5.4%→81.2%. Keyframes cluster in transients, thin out in calm — the
-   variable-rate tandem array is real, not asserted.
+   variable-rate anchor sequence is real, not asserted.
 3. **Unused space is never triggered** — *holds, as a function of operating
    point*. The ambient (bottom-`‖F‖`-decile) anchor rate falls toward zero as `τ`
    climbs (see table). It is **not** ~0 at the seed `τ`; it becomes so at the

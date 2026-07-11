@@ -1,4 +1,4 @@
-# .bee Zinc-Finger Keyframe Blueprint
+# .bee Zinc Keyframe Blueprint
 
 **Date: 2026-07-10. Status: architecture proposal — one axis redefinition, one
 math guardrail, a beecore module map, and a measured build sequence.**
@@ -9,30 +9,36 @@ implements), `BEE_FORMAT_BLUEPRINT.md` (the v0 container it extends), and
 Evidence base, all in-repo: `LOOP_DEDUP_FINDINGS.md`,
 `POOL_RESIDUAL_FINDINGS.md` (exp4), `VERDICT.md` (exp3), `beecore/bench/RESULTS.md`.
 
-This blueprint takes the *Zinc-Finger Keyframe Paradigm* as given and says
-exactly where it lives, what it wins, what it must **not** try to be, and how to
-build it bit-exact against the Python reference — the same discipline that
-carried Layer 1.
+This blueprint takes the *Zinc Keyframe mechanism* as given and says exactly
+where it lives, what it wins, what it must **not** try to be, and how to build
+it bit-exact against the Python reference — the same discipline that carried
+Layer 1.
 
 ---
 
-## 0. Translation: the paradigm in one pass, then in project vocabulary
+## 0. Vocabulary — the mechanism, stated directly in its own math
 
-The biology maps cleanly and we use it once, then drop it for the engineering
-word:
+Earlier drafts introduced this mechanism through a zinc-finger-protein
+analogy (predictive strand, major-groove insertion, polymerase drift, tandem
+arrays). That analogy is retired below in favor of the math it stood in for —
+the mechanism doesn't need biology to be precise, and carrying two
+vocabularies for one system was itself a source of ambiguity. Kept here only
+as a historical cross-reference for anyone who saw the earlier drafts:
 
-| Zinc-finger term | What it *is* in a codec |
+| Former (retired) term | Resolved term used from here on |
 |---|---|
-| Predictive strand / protein fold `Ψ̂(t)` | The decoder's **extrapolated state** between anchors (predictive coding) |
-| Zinc anchor / keyframe | An **I-frame**: a full, absolute state coordinate that resets prediction error |
-| Major-groove insertion / phase lock | The I-frame **snap** — decoder state is pinned to ground truth at that sample |
-| Variable-rate tandem arrays | **Adaptive-GOP rate control** — I-frames placed by content, not on a fixed grid |
-| Polymerase drift `D(t) > τ` | The **anchor-placement rule** — insert a keyframe when prediction has drifted past threshold |
+| Predictive strand / protein fold `Ψ̂(t)` | **Predicted-state trajectory** `Ψ̂(t)` — the decoder's extrapolated state between anchors |
+| Zinc anchor / keyframe | **Anchor state** — a full, absolute state coordinate that resets prediction error |
+| Major-groove insertion / phase lock | **State reset (hard sync)** — decoder state is pinned to ground truth at that sample |
+| Variable-rate tandem arrays | **Variable-rate anchor sequence** — anchors placed by content (drift), not a fixed grid |
+| Polymerase drift `D(t) > τ` | **State-deviation metric** `D(t)` exceeding threshold `τ` — the anchor-placement rule |
 
-So: **zinc-finger = adaptive-GOP predictive coding with a volatility-driven
-I-frame policy.** Everything below uses that vocabulary. This is the concrete
-mechanism for the **light-by-default base layer** locked on 2026-07-06
-(`BEE_LIGHT_BLUEPRINT` §2) — not a new format, not a fourth codec.
+So: **the mechanism is adaptive-threshold predictive coding with a
+volatility-triggered anchor policy** — insert an anchor when the state
+deviation `D(t)` exceeds `τ`, hold the predicted trajectory `Ψ̂(t)` otherwise.
+Everything below uses this vocabulary. This is the concrete mechanism for the
+**light-by-default base layer** locked on 2026-07-06 (`BEE_LIGHT_BLUEPRINT`
+§2) — not a new format, not a fourth codec.
 
 ---
 
@@ -65,7 +71,7 @@ energy belongs and where "my work is no joke" becomes *measured*, not asserted.
 
 `BEE_LIGHT_BLUEPRINT` §1 already established: "same or better quality than FLAC
 but lighter" is winnable **perceptually and only perceptually.** The
-zinc-finger rate policy is the lever — spend ~0 bits on ambient stretches, dense
+adaptive-threshold rate policy is the lever — spend ~0 bits on ambient stretches, dense
 anchor arrays only on transients — riding on the neural base layer (Decision 2).
 
 - **Baseline:** Opus and an EnCodec/DAC-family neural codec at matched bitrate.
@@ -113,13 +119,13 @@ theoretical "maximum ratio" is claimed.
 
 ---
 
-## 3. Where zinc-finger lives — one layer, driving one base, being the index
+## 3. Where the adaptive-threshold index lives — one layer, driving one base, being the index
 
 Do not spawn a fourth codec. Three representations already exist: beecore's v0
 FLAC/zlib container, the LOCKED neural-RVQ base + optional lossless residual, and
 this predictive index. Unify:
 
-> **Zinc-finger is the adaptive-keyframe / rate-control layer that both (a) *is*
+> **The Zinc index is the adaptive-keyframe / rate-control layer that both (a) *is*
 > the navigation index and (b) drives bit allocation for whichever base codec the
 > manifest names. It never reconstructs audio by itself.**
 
@@ -130,7 +136,7 @@ this predictive index. Unify:
   headline — **phase-locked AV triggers**. This is small, exact-enough for
   navigation, and contradicts nothing.
 
-- **HARD NON-GOAL:** a zinc-finger predictor that reconstructs **audio** from
+- **HARD NON-GOAL:** an adaptive-threshold predictor that reconstructs **audio** from
   `(r, θ, z)`. exp3/`VERDICT` proved the compact axis does not invert to timbre;
   LOCKED Decision 2 puts audio reconstruction in the neural base + residual. A
   keyframe predictor over 2 scalars per frame cannot carry 44.1 kHz. Off the
@@ -148,7 +154,7 @@ this predictive index. Unify:
 Promote the *logic* already prototyped in `mg.py` and the `encode.py` edit into a
 clean reference, then port to Rust. Four pieces:
 
-1. **Predictive strand — `Ψ̂(t)`.** v1: zero-order hold from the last anchor
+1. **Predicted-state trajectory — `Ψ̂(t)`.** v1: zero-order hold from the last anchor
    (predict = last anchored state). v2: first-order extrapolation along the helix
    tangent (`κ, τ` are already exact in `encode.py`). Keep v1 for the first
    bit-exact port; it is the simplest falsifiable baseline.
@@ -161,7 +167,7 @@ clean reference, then port to Rust. Four pieces:
    `D(t) = ‖s(t) − Ψ̂(t | last_anchor)‖`. Decide this before the Rust port —
    cheap now, expensive after it is in Rust and the reference has to match.
 
-3. **Threshold — `τ`.** Starting heuristic from the polymerase work:
+3. **Threshold — `τ`.** Starting heuristic from the drift-threshold work:
    `τ = φ · (track_volatility · MAX_PERCEPTUAL_LATENCY_SEC)` with a `1e-6` floor
    (`PHI`, `MAX_PERCEPTUAL_LATENCY_SEC = 0.020` in `encode.py`). Treat this as a
    *seed*, not a truth: `τ` is the rate–distortion knob of §2 and gets swept and
@@ -172,7 +178,7 @@ clean reference, then port to Rust. Four pieces:
 4. **Anchor + snap.** When `D(t) > τ`: emit an **anchor** = absolute
    `(r, θ, z)` (+ raw `(A, I)`), reset `D → 0`, resume prediction from the anchor.
    Anchors cluster densely in transients, vanish in ambient passages — the
-   variable-rate tandem array.
+   variable-rate anchor sequence.
 
 **Invariant — unused space is never triggered.** Un-anchored regions are pure
 *absence*: no key is written, no bytes are occupied, no runtime event fires.
@@ -262,8 +268,14 @@ manifest `sections: BTreeMap<String, Section{offset,length}>`). The index is an
 
 - **(a)** Predictor order — zero-order hold (v1) vs helix-tangent extrapolation.
   Start v1; only escalate if the `τ` sweep shows hold wastes anchors.
-- **(b)** `D(t)` norm and per-channel normalization of `(A, I)` before combining
-  (units, §4.3).
+- **(b)** ~~`D(t)` norm and per-channel normalization of `(A, I)` before
+  combining (units, §4.3).~~ **RESOLVED 2026-07-10** (`ZINC_AMBIENT_FINDINGS.md`):
+  per-channel z-score, then a **two-rail rule** — event rail = state through the
+  Laplace high-pass `H(s)=s/(s+λ)` (exact ZOH discretization, λ tied to the
+  track's angular tempo, default `16·ω_bar(meta)` ≈ 2× true beat) fired at
+  `τ_e = 3·seed`; hard rail = absolute hold error at `τ_max = 6·seed`, keeping
+  the provable bound. Corpus: 18–21× sparsity, ambient decile ≤ 0.72%, bound
+  holds. λ's bpm-octave sensitivity stays OPEN (clamp candidate).
 - **(c)** Anchor coordinate precision — full f32 `(r,θ,z,a,i)` vs quantized. Affects
   index size (axis-1a metric); decide by measurement.
 - **(d)** Whether anchors align to bar boundaries (`beehive/loops.py`, one 2π loop
