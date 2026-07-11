@@ -26,3 +26,7 @@ experiments/recon/*.dac
 .quarantine/
 .claude/
 .DS_Store
+
+# third-party reference material (behavior references only -- never committed;
+# see sonofaig-engineering skill: no third-party code/assets in the repo)
+*.pdf

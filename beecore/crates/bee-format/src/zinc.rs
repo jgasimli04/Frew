@@ -34,7 +34,7 @@ pub struct Anchor {
 
 /// Parse the Python-authored `zinc_index` section bytes.
 pub fn read_anchors(section: &[u8]) -> Result<Vec<Anchor>> {
-    if section.len() % ANCHOR_BYTES != 0 {
+    if !section.len().is_multiple_of(ANCHOR_BYTES) {
         return Err(Error::Format(format!(
             "zinc_index length {} is not a multiple of {ANCHOR_BYTES}",
             section.len()

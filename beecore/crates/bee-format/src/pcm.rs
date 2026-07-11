@@ -113,7 +113,7 @@ impl Pcm {
     }
 
     pub fn from_le_bytes(dtype: Dtype, bytes: &[u8]) -> Result<Pcm> {
-        if bytes.len() % dtype.itemsize() != 0 {
+        if !bytes.len().is_multiple_of(dtype.itemsize()) {
             return Err(Error::Format(format!(
                 "raw pcm length {} is not a multiple of itemsize {}",
                 bytes.len(),
