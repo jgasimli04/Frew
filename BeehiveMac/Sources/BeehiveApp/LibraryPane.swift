@@ -2,6 +2,56 @@ import BeehiveKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Single-flight + coalescing gate around `scripts/convert_to_bee.py`, shared
+/// by the manual Prepare→USB flow and the background auto-convert watcher so
+/// they can never spawn overlapping encoders on the same folder. An actor (not
+/// `@MainActor`) so both call sites can `await` without racing.
+///
+/// At most two OS processes are ever chained (one running + one queued). A
+/// caller arriving mid-run is NOT satisfied by that run — its trigger may not
+/// have existed when that run started — it's chained onto a guaranteed fresh
+/// re-run, so `prepare(to:)` never returns before a run that began after its
+/// own invocation completes.
+actor ConverterGate {
+    static let shared = ConverterGate()
+    private var runningTask: Task<Int32, Never>?
+    private var nextTask: Task<Int32, Never>?
+
+    func convert(root: URL, folder: URL) async -> Int32 {
+        if let running = runningTask {
+            if let queued = nextTask { return await queued.value }
+            let queued = Task<Int32, Never> {
+                _ = await running.value
+                return await self.startRun(root: root, folder: folder)
+            }
+            nextTask = queued
+            return await queued.value
+        }
+        return await startRun(root: root, folder: folder)
+    }
+
+    private func startRun(root: URL, folder: URL) async -> Int32 {
+        let task = Task<Int32, Never> { await Self.spawn(root: root, folder: folder) }
+        runningTask = task
+        let code = await task.value
+        runningTask = nil; nextTask = nil
+        return code
+    }
+
+    private static func spawn(root: URL, folder: URL) async -> Int32 {
+        await withCheckedContinuation { cont in
+            let proc = Process()
+            proc.executableURL = root.appendingPathComponent(".venv/bin/python")
+            proc.arguments = [root.appendingPathComponent("scripts/convert_to_bee.py").path,
+                              folder.path]
+            proc.currentDirectoryURL = root
+            do { try proc.run() } catch { cont.resume(returning: -1); return }
+            proc.waitUntilExit()
+            cont.resume(returning: proc.terminationStatus)
+        }
+    }
+}
+
 /// The library half of BeeDeck (BEEDECK_ROADMAP T6 direction): browse a music
 /// folder, search it, load decks from it, and PREPARE → USB — every selected
 /// track becomes/ships as `.bee` (converted through the Python authoritative
@@ -26,13 +76,74 @@ final class LibraryModel: ObservableObject {
     @Published var selection = Set<URL>()
     @Published var busy = false
     @Published var progress = ""
+    @Published var autoConvertEnabled = true
+    @Published var converterUnavailable = false   // repoRoot() couldn't resolve
+    @Published var lastError: String?
 
     static let audioExts: Set<String> = ["bee", "aiff", "aif", "wav", "flac", "mp3", "m4a", "mp4", "mov", "m4v"]
+    /// The converter's own extension set (`scripts/convert_to_bee.py`) — a
+    /// subset of `audioExts` (no mp4/mov/m4v). Auto-convert must filter by
+    /// *this* set or it retries forever on video files that never grow a `.bee`.
+    static let convertibleExts: Set<String> = ["aiff", "aif", "wav", "flac", "mp3", "m4a"]
+
+    private var watchTimer: Timer?
+    private var lastSeenNames: Set<String> = []
+    private var converting = false
+    private var repoRootWarned = false
 
     init() {
         folder = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Desktop/Music")
         rescan()
+        lastSeenNames = currentNames()
+        watchTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.autoConvertTick() }
+        }
+    }
+
+    // ---- background auto-convert (θ grid for every new file) ----------------
+
+    private func currentNames() -> Set<String> {
+        let items = (try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: nil)) ?? []
+        return Set(items.map(\.lastPathComponent))
+    }
+
+    /// Cheap no-op unless the folder's file set actually changed since the last
+    /// tick; only then does it rescan + decide whether a conversion is due.
+    private func autoConvertTick() {
+        guard autoConvertEnabled, !converting else { return }
+        let names = currentNames()
+        guard names != lastSeenNames else { return }
+        lastSeenNames = names
+        rescan()
+        let due = rows.contains {
+            !$0.isBee && !$0.hasBeeSibling && Self.convertibleExts.contains($0.ext)
+        }
+        guard due else { return }
+        startAutoConvert()
+    }
+
+    private func startAutoConvert() {
+        guard let root = Self.repoRoot() else {
+            if !repoRootWarned { repoRootWarned = true; converterUnavailable = true }
+            return
+        }
+        converterUnavailable = false
+        converting = true; busy = true
+        progress = "auto-converting new files…"
+        let folder = self.folder
+        Task.detached(priority: .utility) { [weak self] in
+            let code = await ConverterGate.shared.convert(root: root, folder: folder)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.converting = false; self.busy = false
+                if code == 0 { self.progress = "auto-convert: up to date"; self.lastError = nil }
+                else { self.lastError = "auto-convert failed (exit \(code)) — see console" }
+                self.rescan()
+                self.lastSeenNames = self.currentNames()   // count the new .bee siblings
+            }
+        }
     }
 
     var filtered: [Row] {
@@ -119,16 +230,8 @@ final class LibraryModel: ObservableObject {
             if needsConvert {
                 if let root = Self.repoRoot() {
                     await MainActor.run { [weak self] in self?.progress = "encoding .bee (Python authoritative)…" }
-                    let proc = Process()
-                    proc.executableURL = root.appendingPathComponent(".venv/bin/python")
-                    proc.arguments = [root.appendingPathComponent("scripts/convert_to_bee.py").path,
-                                      folder.path]
-                    proc.currentDirectoryURL = root
-                    try? proc.run()
-                    proc.waitUntilExit()
-                    if proc.terminationStatus != 0 {
-                        report.append("converter exited \(proc.terminationStatus)")
-                    }
+                    let code = await ConverterGate.shared.convert(root: root, folder: folder)
+                    if code != 0 { report.append("converter exited \(code)") }
                 } else {
                     report.append("no repo venv found — non-.bee tracks skipped")
                 }
@@ -215,6 +318,13 @@ struct LibraryPane: View {
             if lib.busy { ProgressView().controlSize(.small) }
             if !lib.progress.isEmpty {
                 Text(lib.progress).font(.caption).foregroundColor(.secondary).lineLimit(1)
+            }
+            if lib.converterUnavailable {
+                Text("⚠︎ converter not found (.venv / scripts/convert_to_bee.py)")
+                    .font(.caption).foregroundColor(.red).lineLimit(1)
+            }
+            if let err = lib.lastError {
+                Text("⚠︎ \(err)").font(.caption).foregroundColor(.red).lineLimit(1)
             }
             Button {
                 let p = NSOpenPanel()

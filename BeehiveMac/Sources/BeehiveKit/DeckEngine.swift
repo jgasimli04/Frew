@@ -16,6 +16,9 @@ public final class DeckEngine {
 
     public struct TrackInfo {
         public var name = ""
+        /// Source URL this deck was loaded from — lets the θ-grid upgrade path
+        /// notice when a plain file's `.bee` sibling has appeared.
+        public var url: URL?
         public var lengthSamples: Int64 = 0
         public var sampleRate: Double = 44_100
         public var bpm: Double = 0            // 0 = no grid (sync disabled)
@@ -145,6 +148,7 @@ public final class DeckEngine {
 
         var t = TrackInfo()
         t.name = url.deletingPathExtension().lastPathComponent
+        t.url = url
         t.lengthSamples = Int64(left.count)
         t.sampleRate = sr
         t.bpm = bpm
@@ -171,6 +175,49 @@ public final class DeckEngine {
             out.append((lo, hi))
         }
         return out
+    }
+
+    // ---- θ-grid upgrade (raw → .bee, in place) -----------------------------
+
+    /// If this deck is playing a plain file whose `.bee` sibling has just
+    /// appeared (background auto-convert), swap to it in place — same audible
+    /// content (the converter verifies PCM against the native decoder) —
+    /// restoring position/cue/play state across `bd_deck_load`'s reset instead
+    /// of restarting from 0. Position is captured/restored in *seconds*: raw
+    /// (AVFoundation) and `.bee` (Rust core) decodes are not guaranteed
+    /// frame-aligned for lossy sources, so a few-ms drift there is accepted,
+    /// not chased. Returns true when the swap happened.
+    @discardableResult
+    public func upgradeToBeeIfAvailable(deck: Int) -> Bool {
+        guard !info[deck].isBee, let src = info[deck].url else { return false }
+        let bee = src.deletingPathExtension().appendingPathExtension("bee")
+        guard FileManager.default.fileExists(atPath: bee.path),
+              Self.isSettled(bee) else { return false }   // guards write-in-progress
+        let wasPlaying = isPlaying(deck)
+        let sr = info[deck].sampleRate
+        let posSeconds = position(deck) / sr
+        let cueSeconds = bd_deck_cue(decks[deck]) / sr
+        let hadLoop = bd_deck_loop_active(decks[deck])
+        do { try load(url: bee, deck: deck) }            // deck keeps raw file on failure
+        catch { return false }
+        let dur = info[deck].duration
+        seek(deck, seconds: min(max(posSeconds, 0), dur))
+        bd_deck_set_cue(decks[deck], min(max(cueSeconds, 0), dur) * info[deck].sampleRate)
+        if wasPlaying { bd_deck_play(decks[deck]) }
+        if hadLoop { print("BeeDeck: loop cleared by θ-grid upgrade on deck \(deck)") }
+        return true
+    }
+
+    /// `convert_to_bee.py` writes `.bee` directly to its final path (no
+    /// temp+rename), so a freshly-appeared file can still be mid-write. Only
+    /// report settled once the size has stopped changing across two checks a
+    /// poll apart.
+    private static var sizeCache: [URL: Int64] = [:]
+    private static func isSettled(_ url: URL) -> Bool {
+        guard let size = try? FileManager.default
+            .attributesOfItem(atPath: url.path)[.size] as? Int64 else { return false }
+        defer { sizeCache[url] = size }
+        return sizeCache[url] == size
     }
 
     // ---- transport ---------------------------------------------------------
