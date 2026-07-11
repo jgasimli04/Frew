@@ -21,9 +21,13 @@ let package = Package(
                 .linkedLibrary("bee_ffi"),
             ]
         ),
-        .target(name: "BeehiveKit", dependencies: ["CBee"]),
+        // BeeDeck realtime DSP core (BEEDECK_ROADMAP T3/T4): pure C, called
+        // from the AVAudioSourceNode render block — realtime stays off the
+        // Swift runtime per the transition blueprint §2.
+        .target(name: "CBeeDeck"),
+        .target(name: "BeehiveKit", dependencies: ["CBee", "CBeeDeck"]),
         .executableTarget(name: "BeehiveApp", dependencies: ["BeehiveKit"]),
-        .executableTarget(name: "beehive-cli", dependencies: ["BeehiveKit"]),
+        .executableTarget(name: "beehive-cli", dependencies: ["BeehiveKit", "CBeeDeck"]),
         // NOTE: Tests/BeehiveKitTests (XCTest) runs under Xcode. Command Line
         // Tools has no XCTest, so the same checks also run via `beehive-cli --selftest`.
     ]

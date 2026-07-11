@@ -14,7 +14,17 @@ import SwiftUI
 /// correlation — no manual assignment (user decision, 2026-07-10).
 struct StageView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var decks: DeckSession
     @StateObject private var stage = StageController()
+
+    /// When a deck is on air its EQ band taps replace the offline envelopes
+    /// as the stage's signal source (T4 hand-off) — and if it's a `.bee`, the
+    /// overlay renders that deck's own helix, phase-locked to its playhead.
+    private var liveOn: Bool { decks.liveBands != nil }
+    private var liveBars: Double? {
+        guard let (r, i) = decks.liveStage, i < r.alpha.count else { return nil }
+        return r.alpha[i] / (2 * .pi)
+    }
 
     var body: some View {
         ZStack {
@@ -26,7 +36,16 @@ struct StageView: View {
             PlayerLayerView(player: stage.playerB)
                 .opacity(stage.frontIsA ? 0 : 1)
 
-            if let r = model.record {
+            if let (r, i) = decks.liveStage {
+                TimelineView(.animation) { _ in
+                    HelixOverlay(record: r,
+                                 phase: Double(i),
+                                 env: nil,
+                                 liveBands: decks.liveBands,
+                                 liveDrop: decks.liveDrop)
+                }
+                .allowsHitTesting(false)
+            } else if let r = model.record {
                 // redraws are driven by `playheadSeconds`, which the model
                 // publishes once per displayed frame (ProMotion: up to 120 Hz)
                 HelixOverlay(record: r,
@@ -41,18 +60,33 @@ struct StageView: View {
             }
         }
         .animation(.easeInOut(duration: 0.8), value: stage.frontIsA)
+        .dropDestination(for: URL.self) { urls, _ in
+            stage.addClips(urls)          // drop mp4/mov straight onto the stage
+        }
         .overlay(alignment: .bottom) { controls }
         .onChange(of: model.safeCursor) { _, i in
-            guard let r = model.record, i < r.alpha.count else { return }
+            guard !liveOn, let r = model.record, i < r.alpha.count else { return }
             stage.sync(bars: r.alpha[i] / (2 * .pi))
         }
         .onChange(of: model.isPlaying) { _, playing in
+            guard !liveOn else { return }
             if let r = model.record { stage.setTempo(bpm: r.meta.bpm) }
             stage.setPlaying(playing)
         }
+        .onChange(of: liveBars) { _, bars in
+            if let b = bars { stage.sync(bars: b) }
+        }
+        .onChange(of: liveOn) { _, on in
+            if on {
+                let bpm = max(decks.deck[0].playing ? decks.deck[0].effBpm : 0,
+                              decks.deck[1].playing ? decks.deck[1].effBpm : 0)
+                if bpm > 0 { stage.setTempo(bpm: bpm) }
+            }
+            stage.setPlaying(on || model.isPlaying)
+        }
         .onAppear {
             if let r = model.record { stage.setTempo(bpm: r.meta.bpm) }
-            stage.setPlaying(model.isPlaying)
+            stage.setPlaying(liveOn || model.isPlaying)
         }
     }
 
@@ -90,11 +124,14 @@ struct StageView: View {
 /// *fractional* frame index (interpolated between the record's grid frames) so
 /// motion stays smooth at any refresh rate — ProMotion included — while the
 /// picture remains phase-locked to the same grid the helix record and the zinc
-/// keys live on.
+/// keys live on. When a deck is on air its EQ band taps (`liveBands`/`liveDrop`)
+/// replace the offline envelopes as the band signal source (T4 hand-off).
 private struct HelixOverlay: View {
     let record: HelixRecord
     let phase: Double                 // fractional frame index of the playhead
     let env: BandEnvelopes?
+    var liveBands: [Float]? = nil     // deck EQ taps, when a deck is on air
+    var liveDrop: Float? = nil
 
     var body: some View {
         Canvas { ctx, size in
@@ -106,8 +143,8 @@ private struct HelixOverlay: View {
             func lerp(_ a: [Double]) -> Double { a[i] + (a[j] - a[i]) * u }
             func lerpF(_ a: [Float]) -> Double { Double(a[i]) + (Double(a[j]) - Double(a[i])) * u }
 
-            let bands = env?.values(at: ft) ?? [0, 0, 0, 0, 0]
-            let drop = Double(env?.drop(at: ft) ?? 0)
+            let bands = liveBands ?? env?.values(at: ft) ?? [0, 0, 0, 0, 0]
+            let drop = liveDrop.map(Double.init) ?? Double(env?.drop(at: ft) ?? 0)
             let sub = Double(bands[0]), low = Double(bands[1])
             let hiMid = Double(bands[3]), hi = Double(bands[4])
 
@@ -243,6 +280,17 @@ final class StageController: ObservableObject {
         idx = -1
         lastBlock = Int.min
         if !clips.isEmpty { advance() }
+    }
+
+    /// Dropped videos join the set (a folder pick is not required first).
+    @discardableResult
+    func addClips(_ urls: [URL]) -> Bool {
+        let vids = urls.filter { Self.exts.contains($0.pathExtension.lowercased()) }
+        guard !vids.isEmpty else { return false }
+        let wasEmpty = clips.isEmpty
+        clips.append(contentsOf: vids.filter { !clips.contains($0) })
+        if wasEmpty, !clips.isEmpty { idx = -1; lastBlock = Int.min; advance() }
+        return true
     }
 
     /// Video speed gently slaved to the music's tempo.

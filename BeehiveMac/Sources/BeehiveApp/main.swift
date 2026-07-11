@@ -37,6 +37,14 @@ struct ContentView: View {
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button {
+                    openWindow(id: "decks")
+                } label: {
+                    Label("Decks", systemImage: "circle.grid.2x1")
+                }
+                .help("Open BeeDeck — two decks, 5-band isolator mixer, θ-synced")
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
                     openWindow(id: "stage")
                 } label: {
                     Label("Stage", systemImage: "sparkles.tv")
@@ -182,6 +190,7 @@ private struct CompressionChip: View {
 
 struct BeehiveApplication: App {
     @StateObject private var model = AppModel()
+    @StateObject private var decks = DeckSession()
 
     var body: some Scene {
         WindowGroup("Beehive") {
@@ -194,9 +203,18 @@ struct BeehiveApplication: App {
         Window("Stage", id: "stage") {
             StageView()
                 .environmentObject(model)
+                .environmentObject(decks)
                 .preferredColorScheme(.dark)
         }
         .defaultSize(width: 1000, height: 640)
+
+        Window("BeeDeck", id: "decks") {
+            DecksView()
+                .environmentObject(model)
+                .environmentObject(decks)
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 1240, height: 720)
     }
 }
 

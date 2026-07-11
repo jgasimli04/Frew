@@ -56,6 +56,9 @@ func selftest() {
 }
 
 if CommandLine.arguments.contains("--selftest") { selftest(); exit(0) }
+if CommandLine.arguments.contains("--decktest") { decktest() }
+if let i = CommandLine.arguments.firstIndex(of: "--deckload"),
+   CommandLine.arguments.count > i + 1 { deckload(CommandLine.arguments[i + 1]) }
 
 // Play a .bee natively: Layer 1 decoded by the Rust core (bee-ffi) over the
 // C ABI, rendered through AVAudioEngine. `beehive-cli play <file.bee> [seconds]`

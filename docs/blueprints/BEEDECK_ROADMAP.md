@@ -104,6 +104,17 @@ within ±0.5 dB when all at 0; visuals respond to EQ moves in < 50 ms.
 roll/slicer; all time parameters quantized to bar fractions derived from ω
 (1/16 … 4 bars), beat-aligned via θ. **DoD:** echo tail lands on the grid at any
 tempo; FX bypass is click-free.
+*2026-07-10 — first wave SHIPPED (RMX-IGNITE manual used as the behavior
+reference, math re-derived on the θ grid — see
+`docs/findings/BEEDECK_FX_FINDINGS.md` for the measured numbers):* per-deck FX
+slot on the isolator band buses (LOW/MID/HI/ALL routing over the 5-band LR4
+split) with ECHO (beat-fraction delay, tape-glide time), DUCK (pure g(φ)
+envelope), ROLL and REVERSE (previous-θ-cycle capture replay — zero new clock
+code), DRIVE (waveshaper), and a momentary ECHO-OUT release punch. DoD checks
+live in `beehive-cli --decktest` (tests 7–13).
+*Same day, second wave:* SWEEP, FLANGER, PHASER, SLICER, REVERB — the full
+ten-effect catalog, measured in decktest 14–18 (findings doc §second wave).
+Still open: FX on the master bus; per-effect sub-parameters.
 
 **T6 — Prepare → USB.** Track picker → per track: Python analysis (authors helix
 record + zinc keys) → `.bee` written onto the mounted stick + a library index
