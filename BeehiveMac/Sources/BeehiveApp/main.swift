@@ -1,31 +1,107 @@
 import BeehiveKit
 import SwiftUI
 
-struct ContentView: View {
+/// The single-window workspace (Logic-style): a mode strip in the toolbar
+/// switches the center between PERFORM (decks + mixer + FX) and ANALYZE
+/// (helix scene + inspector); the library browser is the persistent left
+/// rail in ANALYZE, and PERFORM carries its own load-to-deck browser. The
+/// Stage stays a separate window on purpose — it is the *output* surface,
+/// meant for a second display, not a workspace mode.
+enum Workspace: String, CaseIterable {
+    case perform = "Perform"
+    case analyze = "Analyze"
+
+    var symbol: String {
+        switch self {
+        case .perform: return "circle.grid.2x1"
+        case .analyze: return "waveform.and.magnifyingglass"
+        }
+    }
+}
+
+struct WorkspaceView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var decks: DeckSession
     @Environment(\.openWindow) private var openWindow
+    @AppStorage("workspace") private var workspaceRaw = Workspace.perform.rawValue
+
+    private var workspace: Workspace {
+        get { Workspace(rawValue: workspaceRaw) ?? .perform }
+    }
 
     var body: some View {
-        NavigationSplitView {
-            List(model.songs, id: \.self, selection: $model.selected) { url in
-                HStack(spacing: 6) {
-                    Text(model.shortName(url)).lineLimit(1)
-                    if url.pathExtension.lowercased() == "bee" {
-                        Text("bee")
-                            .font(.caption2.monospaced()).foregroundColor(.black)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Color.yellow.opacity(0.85), in: Capsule())
+        Group {
+            switch workspace {
+            case .perform: DecksView()
+            case .analyze: AnalyzeView2Pane()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(BD.bg)
+        .safeAreaInset(edge: .bottom, spacing: 0) { statusBar }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("", selection: $workspaceRaw) {
+                    ForEach(Workspace.allCases, id: \.rawValue) { w in
+                        Label(w.rawValue, systemImage: w.symbol).tag(w.rawValue)
                     }
                 }
-                .tag(url)
+                .pickerStyle(.segmented)
+                .frame(width: 240)
+                .help("Workspace — Perform: decks, mixer, FX · Analyze: the helix record")
             }
-            .listStyle(.sidebar)
-            .navigationTitle("Songs")
-        } detail: {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    openWindow(id: "stage")
+                } label: {
+                    Label("Stage", systemImage: "sparkles.tv")
+                }
+                .help("Open the Stage output window — clips, neural trace, helix overlay (put it on the projector)")
+            }
+        }
+        .navigationTitle("BeeDeck")
+        .onAppear { model.start() }
+    }
+
+    /// Global status rail — one line of truth across both workspaces, the
+    /// way Logic's control bar persists under every view.
+    private var statusBar: some View {
+        HStack(spacing: BD.gap) {
+            let chip = decks.engineChip
+            Circle().fill(chip.ok ? BD.good : BD.warn).frame(width: 6, height: 6)
+            Readout(value: chip.text, color: BD.textDim, size: 10)
+            if let delta = decks.beatDeltaMs {
+                Readout(value: String(format: "Δbeat %+.1f ms", delta),
+                        color: abs(delta) < 10 ? BD.good : BD.accent, size: 10)
+            }
+            Divider().frame(height: 12)
+            if model.busy { ProgressView().controlSize(.mini) }
+            Text(model.status)
+                .font(.caption2).foregroundColor(BD.textDim)
+                .lineLimit(1)
+            Spacer()
+            Readout(value: decks.status, color: BD.textDim, size: 10)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 26)
+        .background(Color(white: 0.10))
+        .overlay(alignment: .top) { Rectangle().fill(BD.seam.opacity(0.5)).frame(height: 1) }
+    }
+}
+
+// MARK: - ANALYZE: browser rail · helix scene · inspector
+
+private struct AnalyzeView2Pane: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        HSplitView {
+            browser
+                .frame(minWidth: 200, idealWidth: 230, maxWidth: 320)
             if let r = model.record {
                 HStack(spacing: 0) {
-                    stage(r)
-                    Divider()
+                    scene(r)
+                    Divider().overlay(BD.seam.opacity(0.4))
                     inspector(r)
                         .frame(width: 290)
                         .background(Color(white: 0.07))
@@ -34,38 +110,46 @@ struct ContentView: View {
                 placeholder
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    openWindow(id: "decks")
-                } label: {
-                    Label("Decks", systemImage: "circle.grid.2x1")
-                }
-                .help("Open BeeDeck — two decks, 5-band isolator mixer, θ-synced")
-            }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    openWindow(id: "stage")
-                } label: {
-                    Label("Stage", systemImage: "sparkles.tv")
-                }
-                .help("Open the AV stage — inspiration clips + the helix overlay")
-            }
-            ToolbarItem(placement: .automatic) {
-                HStack(spacing: 6) {
-                    if model.busy { ProgressView().controlSize(.small) }
-                    Text(model.status).font(.caption).foregroundColor(.secondary)
-                }
-                .frame(minWidth: 140, alignment: .trailing)
-            }
-        }
-        .onAppear { model.start() }
     }
 
-    // MARK: - left stage: 3D helix + plots + scrubber
+    private var browser: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("LIBRARY")
+                    .font(.system(size: 10, weight: .semibold)).tracking(1.2)
+                    .foregroundColor(BD.textDim)
+                Spacer()
+                Text("\(model.songs.count)")
+                    .font(.caption2.monospaced()).foregroundColor(BD.textDim)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .background(Color(white: 0.14))
+
+            List(model.songs, id: \.self, selection: $model.selected) { url in
+                HStack(spacing: 6) {
+                    Text(model.shortName(url)).lineLimit(1)
+                        .font(.system(size: 12))
+                    Spacer(minLength: 2)
+                    if url.pathExtension.lowercased() == "bee" {
+                        Text("BEE")
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(BD.accent.opacity(0.9), in: RoundedRectangle(cornerRadius: 3))
+                    }
+                }
+                .tag(url)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(BD.panel)
+        }
+        .background(BD.panel)
+    }
 
     @ViewBuilder
-    private func stage(_ r: HelixRecord) -> some View {
+    private func scene(_ r: HelixRecord) -> some View {
         VStack(spacing: 0) {
             HelixSceneView(record: r,
                            cursor: model.playheadFrame,
@@ -92,7 +176,7 @@ struct ContentView: View {
             Button { model.togglePlay() } label: {
                 Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 15))
-                    .foregroundColor(model.isBee ? .yellow : .white)
+                    .foregroundColor(model.isBee ? BD.accent : .white)
                     .frame(width: 22)
             }
             .buttonStyle(.plain)
@@ -100,21 +184,17 @@ struct ContentView: View {
             .keyboardShortcut(.space, modifiers: [])
             .help(model.isBee ? "Play the .bee Layer-1 payload (decoded by the native core)"
                               : "Play via AVFoundation — the level-matched control chain for A/B against a .bee")
-            Text(mmsscs(model.playheadSeconds))
-                .font(.caption.monospaced()).foregroundColor(.cyan)
+            Readout(value: mmsscs(model.playheadSeconds), color: BD.accent)
                 .frame(width: 66, alignment: .leading)
             Slider(value: Binding(get: { model.playheadFrame },
                                   set: { model.setCursor(Int($0.rounded())) }),
                    in: 0...Double(max(r.nFrames - 1, 1)))
-            Text(mmss(r.meta.durationS))
-                .font(.caption.monospaced()).foregroundColor(.secondary)
+            Readout(value: mmss(r.meta.durationS), color: BD.textDim)
                 .frame(width: 44, alignment: .trailing)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color.black)
+        .background(BD.panelDeep)
     }
-
-    // MARK: - right inspector column
 
     @ViewBuilder
     private func inspector(_ r: HelixRecord) -> some View {
@@ -134,7 +214,7 @@ struct ContentView: View {
         VStack(spacing: 12) {
             if model.busy { ProgressView() }
             Text(model.status.isEmpty ? "Add audio files to ~/Desktop/Music" : model.status)
-                .foregroundColor(.secondary)
+                .foregroundColor(BD.textDim)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -193,28 +273,21 @@ struct BeehiveApplication: App {
     @StateObject private var decks = DeckSession()
 
     var body: some Scene {
-        WindowGroup("Beehive") {
-            ContentView()
+        WindowGroup("BeeDeck") {
+            WorkspaceView()
                 .environmentObject(model)
+                .environmentObject(decks)
                 .preferredColorScheme(.dark)
         }
-        .defaultSize(width: 1180, height: 760)
+        .defaultSize(width: 1280, height: 800)
 
-        Window("Stage", id: "stage") {
+        Window("Stage — Output", id: "stage") {
             StageView()
                 .environmentObject(model)
                 .environmentObject(decks)
                 .preferredColorScheme(.dark)
         }
         .defaultSize(width: 1000, height: 640)
-
-        Window("BeeDeck", id: "decks") {
-            DecksView()
-                .environmentObject(model)
-                .environmentObject(decks)
-                .preferredColorScheme(.dark)
-        }
-        .defaultSize(width: 1240, height: 720)
     }
 }
 

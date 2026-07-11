@@ -300,7 +300,8 @@ struct LibraryPane: View {
             list
         }
         .padding(8)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.09)))
+        .background(RoundedRectangle(cornerRadius: BD.radius).fill(BD.panel))
+        .overlay(RoundedRectangle(cornerRadius: BD.radius).strokeBorder(BD.seam.opacity(0.5), lineWidth: 1))
     }
 
     private var toolbar: some View {

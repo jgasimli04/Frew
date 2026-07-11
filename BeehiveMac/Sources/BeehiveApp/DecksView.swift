@@ -325,10 +325,9 @@ struct DecksView: View {
             }
             MixerPane()
             LibraryPane()
-            statusRow
+            keysLegend
         }
         .padding(10)
-        .background(Color(white: 0.05))
         .background(KeyMap())     // hidden buttons carrying the shortcuts
         .onAppear {
             session.startAudio()
@@ -336,27 +335,13 @@ struct DecksView: View {
         }
     }
 
-    private var statusRow: some View {
-        HStack(spacing: 10) {
-            let chip = session.engineChip
-            Text(chip.text)
-                .font(.caption2.monospaced())
-                .foregroundColor(chip.ok ? .green.opacity(0.85) : .red)
-            if let delta = session.beatDeltaMs {
-                Text(String(format: "Δbeat %+.1f ms", delta))
-                    .font(.caption2.monospaced())
-                    .foregroundColor(abs(delta) < 8 ? .yellow : .secondary)
-                    .help("beat-phase offset between the decks on the θ grid — SYNC drives this to 0")
-            }
-            Text(session.status)
-                .font(.caption)
-                .foregroundColor(session.status.contains("failed") ? .red : .secondary)
-                .lineLimit(1)
+    private var keysLegend: some View {
+        HStack {
             Spacer()
             Text("keys: Q/P play · A/L cue · S/K sync · E/U loop · F/J FX · G/H echo-out · ←→ xfade")
                 .font(.caption2.monospaced()).foregroundColor(.secondary.opacity(0.7))
+            Spacer()
         }
-        .padding(.horizontal, 12)
     }
 }
 
@@ -389,7 +374,8 @@ private struct DeckPane: View {
             fxPane
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.09)))
+        .background(RoundedRectangle(cornerRadius: BD.radius).fill(BD.panel))
+        .overlay(RoundedRectangle(cornerRadius: BD.radius).strokeBorder(BD.seam.opacity(0.5), lineWidth: 1))
         .overlay(RoundedRectangle(cornerRadius: 10)
             .strokeBorder(ui.playing ? accent.opacity(0.55) : .clear, lineWidth: 1))
         .dropDestination(for: URL.self) { urls, _ in
@@ -680,7 +666,8 @@ private struct MixerPane: View {
             channel(1)
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.09)))
+        .background(RoundedRectangle(cornerRadius: BD.radius).fill(BD.panel))
+        .overlay(RoundedRectangle(cornerRadius: BD.radius).strokeBorder(BD.seam.opacity(0.5), lineWidth: 1))
     }
 
     private func channel(_ d: Int) -> some View {
