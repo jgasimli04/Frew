@@ -1,4 +1,138 @@
-# HANDOFF — 2026-07-11 · BeeDeck visuals finalized, shipping from main
+# HANDOFF — 2026-07-11 (later) · one branch: decks/mixer/FX merged into main
+
+## State of the world (read first)
+
+- **One branch, one tree: `main` at merge commit `7f0dabf`.** The previous
+  handoff's open thread #1 is done: `worktree-beedeck` (decks, isolator
+  mixer, ten beat FX, library/USB, CBeeDeck C core) is merged into `main`.
+  The worktree checkout and the local branch are deleted;
+  `origin/worktree-beedeck` still exists remotely but its commits are all
+  in `main`'s history. **Nothing has been pushed.**
+- **BeeDeck is an app, not a terminal program.** Installed at
+  `~/Applications/BeeDeck.app`, built from `7f0dabf`, so the installed app
+  now carries everything: helix scene + breathe, AV stage, two decks,
+  isolator mixer, the ten θ-synced FX, library with background `.bee`
+  auto-convert, Prepare→USB export. Launch from Finder/Spotlight or:
+
+  ```sh
+  open ~/Applications/BeeDeck.app
+  ```
+
+  Rebuild after code changes: `BeehiveMac/scripts/make_app.sh --install`.
+  The terminal is only for development — tests, benches, `bee` CLI, and the
+  measured DSP self-test `BeehiveMac/dist/beehive-cli --decktest`.
+
+## What the software is
+
+Two deliverables share this repo:
+
+1. **The `.bee` format** — two-layer audio container: bit-exact PCM
+   (Layer 1) + helix analysis record (Layer 2) + zinc keyframe index
+   (`zinc_index` section; Python authors at encode time, Rust consumes
+   bit-exactly — interop 42/42, T1 DONE note in
+   `docs/blueprints/BEEDECK_ROADMAP.md`).
+2. **BeeDeck** — the macOS DJ + visuals app on top of it, playing through
+   the native Rust core (never reimplementing the codec).
+
+## The app, window by window
+
+**Main window (Beehive).** Library sidebar + 3D helix scene. Load songs;
+encoding runs through the Python authoritative encoder
+(`scripts/convert_to_bee.py`), with a background watcher auto-converting
+library folders. The coil breathes with the live 5-band envelopes; playhead
+is CADisplayLink-paced (up to 120 Hz).
+
+**Decks window** (toolbar button). Two decks + mixer + beat FX, DSP in
+`CBeeDeck/beedeck.c`:
+
+- **Decks (T3):** hue-colored min/max waveform, beatgrid at θ≡0, 4 hot cues
+  per deck, auto/manual loops on the bar math, beat jump, SYNC (match ω,
+  phase-lock θ), tempo slider, slip. Measured: loop-wrap declick max step
+  1.25× a clean sine's slope; varispeed 440 Hz @ ×1.06 → 466.0 Hz (target
+  466.4) — `docs/findings/BEEDECK_T3T4_FINDINGS.md`.
+- **Mixer (T4):** trim, 5-band full-kill isolator EQ (LR4 at
+  60/250/2000/8000 Hz), channel faders, constant-power crossfader (centre
+  −3.01 dB). Measured: all-open band sum flat within ±0.0045 dB; all-band
+  kill → rms exactly 0 (true −∞); bass-kill leakage −72 dB (same findings).
+- **Beat FX (T5):** ECHO, DUCK, ROLL, REVERSE, DRIVE, ECHO-OUT, SWEEP,
+  FLANGER, PHASER, SLICER, REVERB — time parameters quantized to bar
+  fractions from ω. Measured: echo tap grid error 0.0 samples native /
+  2.1 samples (0.05 ms) at ×1.06; engage/bypass worst step 1.81× a clean
+  sine's slope across all ten — `docs/findings/BEEDECK_FX_FINDINGS.md`.
+- **Keyboard** (Decks window key): `Q/P` play · `A/L` cue · `S/K` sync ·
+  `E/U` auto-loop · `W/R · Y/I` halve/double loop · `Z/X · N/M` beat jump
+  ±4 · `1–4` / `7–0` hot cues (⇧ clears) · `←/→` crossfader nudge, `↓`
+  centre · `F/J` FX on · `T/O` FX type (⇧ = band target) · `V B / , .` FX
+  beats · `G/H` hold = echo-out.
+
+**Stage window** (toolbar button). T2 AV stage: video inspiration set
+(folder pick or drag-drop mp4/mov/m4v), 8-bar crossfade advance, rate slaved
+to bpm; generative helix overlay (rotation = α, 12 chroma petals,
+band-driven inflate, bass-departure deflate/veil), fractional-frame
+interpolated. When a deck is on air, its live EQ band taps replace the
+offline envelopes as the overlay's signal source (T4 hand-off).
+
+**Prepare → USB (T6, partial).** Export `.bee` + index to a mounted stick
+via the Python encoder. The T6 DoD (cold-load on a second Mac + per-file
+native-decode verification) has **not** been run yet.
+
+## Roadmap position (source of truth: `docs/blueprints/BEEDECK_ROADMAP.md`)
+
+| Task | State |
+|---|---|
+| T0 zinc ambient-balance math | DONE (`ZINC_AMBIENT_FINDINGS.md`) |
+| T1 zinc keys in `.bee` + Rust consumer | DONE (interop 42/42) |
+| T2 AV stage v0 | shipped |
+| T3 decks / T4 mixer | shipped, measured (`BEEDECK_T3T4_FINDINGS.md`) |
+| T5 beat FX | ten effects shipped, measured; master-bus FX + sub-parameters open |
+| T6 Prepare→USB | export works; cold-load DoD not verified |
+| T7 visual correlation v1 | not started |
+| T8 polish (key detect, MIDI, 4-deck) | not started |
+| T9 cross-track auto-mix ("Audio Swap") | not started (spec in roadmap) |
+
+## Verify everything (all green at `7f0dabf`, 2026-07-11)
+
+```sh
+.venv/bin/python -m pytest tests/ -q                 # 25/25
+cd beecore && cargo test -p bee-format               # 11/11
+cd beecore && cargo build --release                  # needed by interop
+.venv/bin/python beecore/interop/test_interop.py     # 42/42
+cd BeehiveMac && swift build                         # green
+BeehiveMac/dist/beehive-cli --decktest               # DSP measured self-test
+```
+
+## Merge provenance (what "one branch" cost)
+
+Both trees had independently built T0 (zinc math) and T2 (stage). Resolution
+policy: `main`'s versions kept wherever `main` was a strict superset
+(`zinc.py` with T1 serialization, fractional-frame `BandEnvelopes`, icon
+packaging, `.gitignore`); `worktree-beedeck`'s deck work taken whole
+(DeckEngine, DecksView, LibraryPane, CBeeDeck, decktest, FX findings);
+hand-blends where both sides carried real features: `StageView.swift` (deck
+live source + fractional interpolation), `main.swift` (deck window wiring +
+breathe path), `AppModel.swift` (CADisplayLink pacing kept over the 30 Hz
+timer), `BEEDECK_ROADMAP.md` (union of statuses). Full detail in `7f0dabf`'s
+commit message.
+
+## Open threads (next session)
+
+1. Listen-test the helix breathe in the merged app; tune the four knobs
+   (`HelixSceneView` `applyAudio`/`init`).
+2. T5 remainder: master-bus FX, per-effect sub-parameters.
+3. T6 DoD: prepare a stick, cold-load on another Mac, native-decode verify.
+4. Decide whether to push `main` and retire `origin/worktree-beedeck`
+   (user call; nothing pushed so far).
+5. Known limits (from 2026-07-10): type-switch while engaged hard-cuts old
+   wet; ROLL wrap hard cut by design; stage visuals tap pre-FX band
+   envelopes; non-`.bee` tracks free-run FX on a 0.5 s pseudo-beat.
+
+---
+
+# Previous handoff — 2026-07-11 · BeeDeck visuals finalized, shipping from main
+
+*(Superseded by the merge above: the "not in the installed app" caveat and
+open thread #1 no longer apply; zinc files listed as uncommitted are
+committed as of `68f5398`/`1ac93cc`.)*
 
 ## State of the world (read first)
 
@@ -78,25 +212,6 @@ breathe tracks the 2D stage overlay (same `bandEnv`, same playhead); auto-spin
 composes with the breathe; bead stays on the curve. Adjust the knobs above if
 too strong/subtle.
 
-## Deliberately left uncommitted (separate streams)
-- **zinc**: `beehive/zinc.py`, `scripts/zinc_report.py`, `tests/test_zinc.py`,
-  `docs/blueprints/BEE_ZINC_KEYFRAME_BLUEPRINT.md`,
-  `docs/findings/ZINC_PHASE1_FINDINGS.md`, `docs/findings/ZINC_AMBIENT_FINDINGS.md`.
-- `CLAUDE.md` (untracked), the two PDFs in the repo root (CDJ-3000X manual
-  9.3 MB + RMX-IGNITE manual) — still undecided: commit, move to
-  `docs/reference/`, or ignore (2026-07-10 thread).
-
-## Open threads (next session)
-1. **Merge `worktree-beedeck` → `main`** — restores decks/isolator/FX into the
-   shipping app. Both sides touched `main.swift`, `AppModel.swift`,
-   `Package.swift`; expect real conflicts, re-run `beehive-cli --decktest`
-   (tests 7–18) after.
-2. Listen-test the helix breathe; tune the four knobs.
-3. T5 remainder: master-bus FX, per-effect sub-parameters.
-4. Known limits (unchanged, from 2026-07-10): type-switch while engaged
-   hard-cuts old wet; ROLL wrap hard cut by design; stage visuals tap pre-FX
-   band envelopes; non-`.bee` tracks free-run FX on a 0.5 s pseudo-beat.
-
 ---
 
 # Previous handoff — 2026-07-10 · BeeDeck beat FX (T5 first wave)
@@ -134,8 +249,3 @@ the first five — ten effects total, all θ-synced, all measured (decktest
 14–18: sweep −42.8 dB closed/+0.1 dB open; flanger 10.1 dB / phaser 11.0 dB
 notch swing; slicer 8/8 on pattern; reverb tail monotonic from −34 dB with
 exact-silence floor; engage/bypass click-free across all ten).
-
-Note (2026-07-11): the "rebuild via make_app.sh" pointer from this section now
-refers to **main's** `BeehiveMac/scripts/make_app.sh`; the worktree copy is
-stale, and the installed app no longer carries the FX until the merge (open
-thread #1 above).
