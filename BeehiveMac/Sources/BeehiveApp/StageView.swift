@@ -25,16 +25,27 @@ struct StageView: View {
         guard let (r, i) = decks.liveStage, i < r.alpha.count else { return nil }
         return r.alpha[i] / (2 * .pi)
     }
+    /// Sub-band level for the video zoom pulse — deck taps when live,
+    /// otherwise the offline envelope at the playhead.
+    private var subLevel: Double {
+        if let live = decks.liveBands { return Double(live[0]) }
+        guard let env = model.bandEnv else { return 0 }
+        return Double(env.values(at: model.playheadFrame)[0])
+    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            // background: the inspiration set, two layers crossfading
-            PlayerLayerView(player: stage.playerA)
-                .opacity(stage.frontIsA ? 1 : 0)
-            PlayerLayerView(player: stage.playerB)
-                .opacity(stage.frontIsA ? 0 : 1)
+            // background: the inspiration set, two layers crossfading; the
+            // whole video surface breathes with the sub band (zoom pulse)
+            Group {
+                PlayerLayerView(player: stage.playerA)
+                    .opacity(stage.frontIsA ? 1 : 0)
+                PlayerLayerView(player: stage.playerB)
+                    .opacity(stage.frontIsA ? 0 : 1)
+            }
+            .scaleEffect(1 + 0.05 * CGFloat(subLevel))
 
             if let (r, i) = decks.liveStage {
                 TimelineView(.animation) { _ in
@@ -55,8 +66,14 @@ struct StageView: View {
             }
 
             if stage.clips.isEmpty {
-                Text("Choose a clips folder — the inspiration set")
-                    .font(.title3).foregroundColor(.white.opacity(0.55))
+                VStack(spacing: 6) {
+                    Text("Choose clips — or drag videos onto the stage")
+                        .font(.title3).foregroundColor(.white.opacity(0.55))
+                    if !stage.lastPickNote.isEmpty {
+                        Text(stage.lastPickNote)
+                            .font(.caption).foregroundColor(.orange.opacity(0.9))
+                    }
+                }
             }
         }
         .animation(.easeInOut(duration: 0.8), value: stage.frontIsA)
@@ -170,6 +187,74 @@ private struct HelixOverlay: View {
                          with: .color(.black.opacity(0.38 * drop)))
             }
 
+            // beat shockwaves: θ places a beat at every quarter bar (4/4 on
+            // the same grid SYNC locks to); each beat launches a ring that
+            // expands and fades over its beat, radius punched by the low end
+            let beatLen = Double.pi / 2
+            let beatPhase = ((alpha.truncatingRemainder(dividingBy: beatLen)) + beatLen)
+                .truncatingRemainder(dividingBy: beatLen) / beatLen
+            let punch = 0.35 + 0.65 * max(sub, low)
+            for back in 0..<2 {                     // current beat + the one before
+                let p = beatPhase + Double(back)
+                guard p < 1.8 else { continue }
+                let rad = R * CGFloat(0.5 + 1.9 * p) * CGFloat(inflate)
+                let fade = pow(max(1 - p / 1.8, 0), 2) * punch
+                guard fade > 0.02 else { continue }
+                ctx.stroke(
+                    Path(ellipseIn: CGRect(x: c.x - rad, y: c.y - rad,
+                                           width: 2 * rad, height: 2 * rad)),
+                    with: .color(Color(hue: hue, saturation: 0.5 * sat + 0.2,
+                                       brightness: 1).opacity(0.55 * fade)),
+                    lineWidth: 1 + 7 * CGFloat(fade))
+            }
+
+            // spectrum ring: 48 ticks around the outside, tick length = the
+            // 5 band taps splined across the arc (mirrored), turning with α/4
+            let specR = R * 1.55 * CGFloat(inflate)
+            for t in 0..<48 {
+                let frac = Double(t) / 48.0
+                let mirrored = frac < 0.5 ? frac * 2 : (1 - frac) * 2   // low..high..low
+                let bandPos = mirrored * 4                              // 0..4 across 5 bands
+                let bi = min(Int(bandPos), 3)
+                let bu = bandPos - Double(bi)
+                let level = Double(bands[bi]) * (1 - bu) + Double(bands[bi + 1]) * bu
+                guard level > 0.03 else { continue }
+                let ang = alpha / 4 + frac * 2 * .pi
+                let inner = specR
+                let outer = specR + R * CGFloat(0.05 + 0.45 * level)
+                var tick = Path()
+                tick.move(to: CGPoint(x: c.x + inner * CGFloat(cos(ang)),
+                                      y: c.y + inner * CGFloat(sin(ang))))
+                tick.addLine(to: CGPoint(x: c.x + outer * CGFloat(cos(ang)),
+                                         y: c.y + outer * CGFloat(sin(ang))))
+                ctx.stroke(tick,
+                           with: .color(Color(hue: (hue + 0.5 * mirrored)
+                                                    .truncatingRemainder(dividingBy: 1),
+                                              saturation: 0.4 + 0.6 * sat,
+                                              brightness: 0.5 + 0.5 * level)
+                                        .opacity(0.25 + 0.6 * level)),
+                           lineWidth: 2.5)
+            }
+
+            // hexagon frame (the beehive cell): counter-rotates at α/3,
+            // breathes with the mids, brightens when the full spectrum is hot
+            let mid = Double(bands[2])
+            let hexR = R * CGFloat((1.18 + 0.14 * mid) * inflate)
+            var hex = Path()
+            for v in 0..<6 {
+                let ang = -alpha / 3 + Double(v) * .pi / 3
+                let pt = CGPoint(x: c.x + hexR * CGFloat(cos(ang)),
+                                 y: c.y + hexR * CGFloat(sin(ang)))
+                if v == 0 { hex.move(to: pt) } else { hex.addLine(to: pt) }
+            }
+            hex.closeSubpath()
+            ctx.stroke(hex,
+                       with: .color(Color(hue: (hue + 0.5).truncatingRemainder(dividingBy: 1),
+                                          saturation: 0.6 * sat + 0.2,
+                                          brightness: 0.9)
+                                    .opacity(0.12 + 0.45 * f * (1 - drop))),
+                       style: StrokeStyle(lineWidth: 1.5 + 4 * f, lineJoin: .round))
+
             // chromatic wash from the timbre hue — the "edit the visuals
             // chromatic" signal, always on while the music is audible
             ctx.fill(Path(CGRect(origin: .zero, size: size)),
@@ -207,17 +292,22 @@ private struct HelixOverlay: View {
                        with: .color(.white.opacity(0.18 + 0.55 * val)),
                        lineWidth: 1.5 + 5 * CGFloat(sub))
 
-            // top-end sparkle orbit, counter-rotating at half phase
+            // top-end sparkle: two counter-rotating orbits, the outer one
+            // wobbling with the high-mids so it shimmers instead of gliding
             if hi + hiMid > 0.05 {
-                let orbit = R * 1.30 * CGFloat(inflate)
-                for j in 0..<24 {
-                    let a = -alpha * 0.5 + Double(j) * .pi / 12
-                    let p = CGPoint(x: c.x + orbit * CGFloat(cos(a)),
-                                    y: c.y + orbit * CGFloat(sin(a)))
-                    let s = CGFloat(1.2 + 3.5 * hi)
-                    ctx.fill(Path(ellipseIn: CGRect(x: p.x - s / 2, y: p.y - s / 2,
-                                                    width: s, height: s)),
-                             with: .color(.white.opacity(0.15 + 0.6 * max(hi, hiMid * 0.6))))
+                for (ring, dots, speed, base) in [(1.30, 24, -0.5, hi),
+                                                  (1.72, 36, 0.35, hiMid)] {
+                    let orbit = R * CGFloat(ring) * CGFloat(inflate)
+                    for j in 0..<dots {
+                        let a = alpha * speed + Double(j) * 2 * .pi / Double(dots)
+                        let wobble = 1 + 0.06 * hiMid * sin(alpha * 3 + Double(j))
+                        let p = CGPoint(x: c.x + orbit * CGFloat(cos(a) * wobble),
+                                        y: c.y + orbit * CGFloat(sin(a) * wobble))
+                        let s = CGFloat(1.2 + 3.5 * base)
+                        ctx.fill(Path(ellipseIn: CGRect(x: p.x - s / 2, y: p.y - s / 2,
+                                                        width: s, height: s)),
+                                 with: .color(.white.opacity(0.15 + 0.6 * max(base, hi * 0.6))))
+                    }
                 }
             }
         }
@@ -250,6 +340,7 @@ final class StageController: ObservableObject {
     @Published private(set) var clips: [URL] = []
     @Published private(set) var currentName = ""
     @Published private(set) var frontIsA = true
+    @Published var lastPickNote = ""        // surfaced when a pick yields nothing
 
     let playerA = AVQueuePlayer()
     let playerB = AVQueuePlayer()
@@ -271,22 +362,48 @@ final class StageController: ObservableObject {
     func chooseFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
-        panel.canChooseFiles = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
         panel.prompt = "Use as Inspiration Set"
-        guard panel.runModal() == .OK, let dir = panel.url else { return }
-        let items = (try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: nil)) ?? []
-        clips = items.filter { Self.exts.contains($0.pathExtension.lowercased()) }.shuffled()
+        panel.message = "Pick video files (mp4/mov/m4v) or a folder of them — subfolders are scanned too"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        var found: [URL] = []
+        for url in panel.urls {
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+            if isDir.boolValue {
+                // recursive walk — clips in subfolders count (flat scan was
+                // the silent "button does nothing" failure)
+                let walker = FileManager.default.enumerator(
+                    at: url, includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants])
+                while let item = walker?.nextObject() as? URL {
+                    if Self.exts.contains(item.pathExtension.lowercased()) { found.append(item) }
+                }
+            } else if Self.exts.contains(url.pathExtension.lowercased()) {
+                found.append(url)
+            }
+        }
+        guard !found.isEmpty else {
+            lastPickNote = "no mp4/mov/m4v found in that selection"
+            return
+        }
+        lastPickNote = ""
+        clips = found.shuffled()
         idx = -1
         lastBlock = Int.min
-        if !clips.isEmpty { advance() }
+        advance()
     }
 
     /// Dropped videos join the set (a folder pick is not required first).
     @discardableResult
     func addClips(_ urls: [URL]) -> Bool {
         let vids = urls.filter { Self.exts.contains($0.pathExtension.lowercased()) }
-        guard !vids.isEmpty else { return false }
+        guard !vids.isEmpty else {
+            lastPickNote = "dropped items had no mp4/mov/m4v"
+            return false
+        }
+        lastPickNote = ""
         let wasEmpty = clips.isEmpty
         clips.append(contentsOf: vids.filter { !clips.contains($0) })
         if wasEmpty, !clips.isEmpty { idx = -1; lastBlock = Int.min; advance() }
