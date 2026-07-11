@@ -1,4 +1,30 @@
-# HANDOFF — 2026-07-11 (later) · one branch: decks/mixer/FX merged into main
+# HANDOFF — 2026-07-11 (latest) · workspace UI, neural trace, clips fix
+
+Three additions on top of the merge below (all committed, nothing pushed;
+app reinstalled at `~/Applications/BeeDeck.app`):
+
+- **Single-window workspace UI** (`6434eaf`). The three ad-hoc windows are
+  now one Logic-style workspace: toolbar switcher **Perform** (decks, mixer,
+  FX) / **Analyze** (helix scene, inspector, library rail), plus a global
+  bottom status rail (engine state, Δbeat, encoder status). The **Stage** is
+  still its own window on purpose — it's the output surface, meant for a
+  projector/second display (toolbar button opens it). Design tokens live in
+  `BeehiveMac/Sources/BeehiveApp/Theme.swift`; new chrome should use them.
+- **T10 neural video trace** (`9ae8724`). Vision contours on the playing
+  clip (OS schedules onto ANE/GPU), five scale strata mapped to the five EQ
+  buses (biggest shapes → sub, finest → hi), re-traced once per θ
+  quarter-bar beat, band levels animate the strokes between beats. Measured:
+  `beehive-cli --tracetest` → 46 contours, median 2.8 ms, worst 26.8 ms per
+  512² trace (a 174 bpm beat is 345 ms). The fuller ask — whole clip decoded
+  offline into a helix-plane record — is OPEN in roadmap T10.
+- **Choose Clips fixed + denser stage overlay** (`44fc959`). The picker was
+  a flat directory-only scan that failed silently; now files-or-folders,
+  recursive, with visible feedback. Overlay gained beat shockwave rings,
+  a 48-tick spectrum ring, a rotating hexagon frame, sub-band video zoom.
+
+---
+
+# Previous handoff — 2026-07-11 (later) · one branch: decks/mixer/FX merged into main
 
 ## State of the world (read first)
 
