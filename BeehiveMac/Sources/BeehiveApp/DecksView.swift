@@ -56,6 +56,7 @@ final class DeckSession: ObservableObject {
     @Published var status = "load a track onto each deck"
 
     private var timer: Timer?
+    private var upgradeCheckCounter = 0
 
     init() {
         engine.setMaster(0.9)
@@ -79,6 +80,24 @@ final class DeckSession: ObservableObject {
         }
         masterPeak = engine.masterLevels()
         tickDrop()
+        upgradeCheckCounter += 1
+        if upgradeCheckCounter >= 60 {          // ~2 s at 30 Hz
+            upgradeCheckCounter = 0
+            checkForBeeUpgrades()
+        }
+    }
+
+    /// A deck playing a plain file whose `.bee` sibling has finished converting
+    /// in the background swaps to it in place — position-preserving, no restart
+    /// — so the θ grid, SYNC and quantized loops come alive mid-playback. Each
+    /// deck self-terminates from this check once `isBee` flips true.
+    private func checkForBeeUpgrades() {
+        for d in 0..<2 where !deck[d].isBee {
+            guard engine.upgradeToBeeIfAvailable(deck: d) else { continue }
+            mirror(d)
+            status = "\(["A", "B"][d]): \(engine.info[d].name)" +
+                String(format: "  %.1f bpm (θ grid) — upgraded in place", engine.info[d].bpm)
+        }
     }
 
     // live bass-departure detector — the same thresholds as the offline
@@ -143,18 +162,25 @@ final class DeckSession: ObservableObject {
             : ("engine stopped — press play", false)
     }
 
+    /// Copy engine `TrackInfo` into the deck's published UI mirror — shared by
+    /// the initial load and the in-place θ-grid upgrade.
+    private func mirror(_ d: Int) {
+        let info = engine.info[d]
+        deck[d].name = info.name
+        deck[d].bpm = info.bpm
+        deck[d].duration = info.duration
+        deck[d].wave = info.wave
+        deck[d].beatSamples = info.beatSamples
+        deck[d].sampleRate = info.sampleRate
+        deck[d].lengthSamples = info.lengthSamples
+        deck[d].isBee = info.isBee
+    }
+
     func load(url: URL, onto d: Int) {
         do {
             try engine.load(url: url, deck: d)
             let info = engine.info[d]
-            deck[d].name = info.name
-            deck[d].bpm = info.bpm
-            deck[d].duration = info.duration
-            deck[d].wave = info.wave
-            deck[d].beatSamples = info.beatSamples
-            deck[d].sampleRate = info.sampleRate
-            deck[d].lengthSamples = info.lengthSamples
-            deck[d].isBee = info.isBee
+            mirror(d)
             status = "\(["A", "B"][d]): \(info.name)" + (info.bpm > 0
                 ? String(format: "  %.1f bpm (θ grid)", info.bpm)
                 : "  no grid (not a .bee) — sync off")
