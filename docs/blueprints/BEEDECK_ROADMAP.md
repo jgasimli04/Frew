@@ -184,6 +184,22 @@ per the Eng track note below), `BeehiveMac/Sources/CBeeDeck/beedeck.c`
 (candidate-triggered crossfade, reusing existing declick infra),
 `docs/findings/CROSS_TRACK_SWAP_FINDINGS.md`.
 
+**T10 — Neural video trace on the stage (user, 2026-07-11).** Trace the
+objects in the playing inspiration clip with on-device neural inference
+(Vision `VNDetectContoursRequest`; the OS schedules it onto the ANE/GPU —
+which accelerator actually runs it is opaque to the app and not claimed) and
+hand each scale stratum of the picture to one EQ bus: biggest contours → sub,
+finest → hi. The trace is resampled once per beat on the θ quarter-bar grid,
+so the traced set changes on the beat; between beats the live band levels
+drive each stratum's stroke. v1 shipped 2026-07-11:
+`BeehiveMac/Sources/BeehiveApp/VideoTrace.swift` (engine + overlay), wired in
+`StageView`. **DoD:** `beehive-cli --tracetest` — measured 46 contours,
+median 2.8 ms, worst 26.3 ms per trace on a synthetic 512² frame (a beat at
+174 bpm is 345 ms: worst case fits ~13×). OPEN: the fuller ask — the whole
+clip decoded offline into a helix-plane record (video's own bar-grid
+analysis, authored at prepare time like Layer 2) — is not started; v1 traces
+live frames only.
+
 **Eng track (parallel, gated):** analyzer port to Rust (`bee-engine`) per
 `BEE_NATIVE_TRANSITION_BLUEPRINT` Phase 6, bit-exact vs Python fixtures. Until it
 lands, Python remains the sole author of records/keys (locked steer); the app

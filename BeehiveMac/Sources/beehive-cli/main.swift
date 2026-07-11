@@ -57,6 +57,7 @@ func selftest() {
 
 if CommandLine.arguments.contains("--selftest") { selftest(); exit(0) }
 if CommandLine.arguments.contains("--decktest") { decktest() }
+if CommandLine.arguments.contains("--tracetest") { tracetest() }
 if let i = CommandLine.arguments.firstIndex(of: "--deckload"),
    CommandLine.arguments.count > i + 1 { deckload(CommandLine.arguments[i + 1]) }
 

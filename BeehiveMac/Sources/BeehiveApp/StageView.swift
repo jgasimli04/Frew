@@ -16,6 +16,7 @@ struct StageView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var decks: DeckSession
     @StateObject private var stage = StageController()
+    @StateObject private var trace = VideoTraceEngine()
 
     /// When a deck is on air its EQ band taps replace the offline envelopes
     /// as the stage's signal source (T4 hand-off) — and if it's a `.bee`, the
@@ -32,6 +33,23 @@ struct StageView: View {
         guard let env = model.bandEnv else { return 0 }
         return Double(env.values(at: model.playheadFrame)[0])
     }
+    /// All five band levels — the trace strata's drivers.
+    private var currentBands: [Float] {
+        if let live = decks.liveBands { return live }
+        guard let env = model.bandEnv else { return [0, 0, 0, 0, 0] }
+        return env.values(at: model.playheadFrame)
+    }
+    /// Beat index on the θ quarter-bar grid — the trace resamples when this
+    /// ticks, which is what makes the picture change ON the beat.
+    private var beatIndex: Int {
+        if let (r, i) = decks.liveStage, i < r.alpha.count {
+            return Int(floor(r.alpha[i] / (.pi / 2)))
+        }
+        guard let r = model.record else { return Int.min }
+        let i = min(model.safeCursor, r.alpha.count - 1)
+        guard i >= 0 else { return Int.min }
+        return Int(floor(r.alpha[i] / (.pi / 2)))
+    }
 
     var body: some View {
         ZStack {
@@ -46,6 +64,11 @@ struct StageView: View {
                     .opacity(stage.frontIsA ? 0 : 1)
             }
             .scaleEffect(1 + 0.05 * CGFloat(subLevel))
+
+            // the neural trace: video outlines redrawn by the band buses,
+            // resampled once per beat (see VideoTraceEngine)
+            TraceOverlay(strata: trace.strata, bands: currentBands)
+                .scaleEffect(1 + 0.05 * CGFloat(subLevel))   // stays glued to the video
 
             if let (r, i) = decks.liveStage {
                 TimelineView(.animation) { _ in
@@ -92,6 +115,9 @@ struct StageView: View {
         }
         .onChange(of: liveBars) { _, bars in
             if let b = bars { stage.sync(bars: b) }
+        }
+        .onChange(of: beatIndex) { _, beat in
+            trace.sample(item: stage.frontItem, beat: beat)
         }
         .onChange(of: liveOn) { _, on in
             if on {
@@ -341,6 +367,9 @@ final class StageController: ObservableObject {
     @Published private(set) var currentName = ""
     @Published private(set) var frontIsA = true
     @Published var lastPickNote = ""        // surfaced when a pick yields nothing
+
+    /// The item currently on screen — what the neural trace samples.
+    var frontItem: AVPlayerItem? { (frontIsA ? playerA : playerB).currentItem }
 
     let playerA = AVQueuePlayer()
     let playerB = AVQueuePlayer()
