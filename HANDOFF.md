@@ -1,7 +1,28 @@
-# HANDOFF — 2026-07-11 (latest) · workspace UI, neural trace, clips fix
+# HANDOFF — 2026-07-11 (latest) · PUSHED: Windows-launchable, provenance, history purged
 
-Three additions on top of the merge below (all committed, nothing pushed;
-app reinstalled at `~/Applications/BeeDeck.app`):
+**The repo is now on GitHub (`jgasimli04/Frew`, branch `main`) for external
+review.** What that took, on top of everything below:
+
+- **History rewrite (user-authorized).** The old remote history contained
+  75-second excerpts of commercial tracks (`experiments/recon/`). Purged from
+  every commit with `git filter-repo`, force-pushed; the fully-merged
+  `origin/worktree-beedeck` branch (which still referenced the old blobs) is
+  deleted. **All commit SHAs changed** — this file's references are remapped;
+  any old clone must be re-cloned. Pre-purge backup bundle:
+  `~/.claude/jobs/91e57ee5/tmp/sonoFaig-pre-purge.bundle`.
+- **Windows launchability.** Everything except the Mac app runs on Windows
+  (README "What runs where" + Windows quickstart): interop harness resolves
+  `bee.exe`, all text I/O pinned UTF-8 (cp1252 was the corruption risk),
+  root `conftest.py`, `requirements.txt`. CI (`.github/workflows/ci.yml`)
+  proves it on a windows-latest runner: pytest, cargo test, the 42-check
+  interop harness, and an encode→decode bit-exactness smoke.
+- **`docs/PROVENANCE.md`** — the original-math-vs-conventional map, per
+  component, with file pointers (README links it first for reviewers).
+
+# Previous — 2026-07-11 · workspace UI, neural trace, clips fix
+
+Three additions on top of the merge below (app reinstalled at
+`~/Applications/BeeDeck.app`):
 
 - **Single-window workspace UI** (`20443da`). The three ad-hoc windows are
   now one Logic-style workspace: toolbar switcher **Perform** (decks, mixer,
