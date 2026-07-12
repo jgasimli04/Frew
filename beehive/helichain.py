@@ -39,7 +39,7 @@ class Helichain:
         """All blocks in order (empty list if the chain is new)."""
         if not os.path.exists(self.chain_path):
             return []
-        with open(self.chain_path) as fh:
+        with open(self.chain_path, encoding="utf-8") as fh:
             return [json.loads(line) for line in fh if line.strip()]
 
     def _find(self, content_hash):
@@ -78,7 +78,7 @@ class Helichain:
             "prev_hash": prev_hash,
             "block_hash": _block_hash(prev_hash, chash, index),
         }
-        with open(self.chain_path, "a") as fh:
+        with open(self.chain_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(block) + "\n")
         return block, True
 

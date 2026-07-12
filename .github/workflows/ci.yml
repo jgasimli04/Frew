@@ -1,0 +1,66 @@
+name: ci
+
+# The format's portability claim, executed: the Python reference suite, the
+# Rust core suite, and the cross-implementation bit-exactness harness run on
+# a real Windows runner (plus Ubuntu as the fast canary). The macOS app is
+# not built here — it is macOS-only by its frameworks (see README).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps (CPU torch)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy soundfile pytest
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: beecore
+
+      - name: Python reference suite
+        run: python -m pytest tests -q
+
+      - name: Rust core suite
+        working-directory: beecore
+        run: cargo test -p bee-format
+
+      - name: Build release core (interop prerequisite)
+        working-directory: beecore
+        run: cargo build --release -p bee-format
+
+      - name: Cross-implementation bit-exactness (Python ⇄ Rust)
+        run: python beecore/interop/test_interop.py
+
+      - name: CLI round-trip smoke (encode → inspect → decode)
+        shell: python {0}
+        run: |
+          import subprocess, sys
+          import numpy as np, soundfile as sf
+          sf.write("smoke.wav", (0.4*np.sin(2*np.pi*220*np.arange(88200)/22050)).astype(np.float32), 22050)
+          for args in (["encode", "smoke.wav", "--bpm", "120"],
+                       ["inspect", "smoke.bee"],
+                       ["decode", "smoke.bee", "-o", "smoke_rt.wav"]):
+              subprocess.run([sys.executable, "-m", "beehive", *args], check=True)
+          a, _ = sf.read("smoke.wav", dtype="float32")
+          b, _ = sf.read("smoke_rt.wav", dtype="float32")
+          assert np.array_equal(a, b), "round-trip PCM not bit-exact"
+          print("smoke round-trip bit-exact")

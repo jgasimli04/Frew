@@ -59,7 +59,7 @@ class HelixRecord:
         """Write <stem>.npz (the stored state only) and <stem>.json (metadata)."""
         arrays = {k: np.asarray(getattr(self, k), dtype=np.float32) for k in STORED_FIELDS}
         np.savez_compressed(f"{stem}.npz", **arrays)
-        with open(f"{stem}.json", "w") as fh:
+        with open(f"{stem}.json", "w", encoding="utf-8") as fh:
             json.dump(self.meta, fh, indent=2)
         return f"{stem}.npz"
 
@@ -70,7 +70,7 @@ class HelixRecord:
         stem = stem[:-4] if stem.endswith(".npz") else stem
         with np.load(f"{stem}.npz") as data:
             stored = {k: data[k] for k in STORED_FIELDS}
-        with open(f"{stem}.json") as fh:
+        with open(f"{stem}.json", encoding="utf-8") as fh:
             meta = json.load(fh)
         der = derive_dynamics(stored["A"], stored["I"], stored["chroma"], meta)
         return cls(meta=meta, **stored, **der)

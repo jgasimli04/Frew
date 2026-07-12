@@ -1,0 +1,8 @@
+# Python reference implementation (beehive/) + tests + interop harness.
+# CPU-only torch is sufficient everywhere (no GPU/MPS/CUDA code paths):
+#   Windows/Linux:  pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   macOS:          pip install torch
+numpy>=1.26
+soundfile>=0.12      # bundles libsndfile wheels on Windows/macOS/Linux
+torch>=2.2
+pytest>=8

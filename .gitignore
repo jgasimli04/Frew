@@ -7,6 +7,7 @@ __pycache__/
 # rust
 beecore/target/
 kernel/target/
+bearing-helix-research/target/
 
 # swift
 BeehiveMac/.build/
@@ -17,10 +18,13 @@ BeehiveMac/dist/
 beecore/interop/.tmp/
 beecore/bench/.tmp/
 
-# exp5 listening pairs + token artifacts (hundreds of MB, regenerable:
-# experiments/exp5_neural_base.py). exp3's small per-track subdirs stay tracked.
-experiments/recon/*.wav
-experiments/recon/*.dac
+# experiment outputs derived from commercial source tracks (third-party audio
+# — never committed; regenerable from your own library via the exp scripts)
+experiments/recon/
+
+# stray local drafts
+/import sys.py
+/mg.py
 
 # local-session things, deliberately out of the project
 .quarantine/

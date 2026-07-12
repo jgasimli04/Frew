@@ -33,7 +33,8 @@ from beehive import beefile, zinc  # noqa: E402
 from beehive.encode import encode_song  # noqa: E402
 from beehive.record import STORED_FIELDS  # noqa: E402
 
-BEE_BIN = REPO / "beecore" / "target" / "release" / "bee"
+_EXE = ".exe" if sys.platform == "win32" else ""
+BEE_BIN = REPO / "beecore" / "target" / "release" / f"bee{_EXE}"
 TMP = pathlib.Path(__file__).resolve().parent / ".tmp"
 
 PASS, FAIL = [], []
@@ -49,7 +50,8 @@ def sha(b):
 
 
 def rust(*args):
-    r = subprocess.run([str(BEE_BIN), *args], capture_output=True, text=True)
+    r = subprocess.run([str(BEE_BIN), *args], capture_output=True,
+                       text=True, encoding="utf-8")
     if r.returncode != 0:
         raise RuntimeError(f"bee {' '.join(args)} failed:\n{r.stderr}")
     return r.stdout
@@ -108,7 +110,7 @@ def run_case(d, name, wav, expect_codec):
                       for k in STORED_FIELDS)
     check(f"{name}: Rust reads Layer-2 arrays bit-exact", side_ok)
     check(f"{name}: Rust reads Layer-2 meta verbatim",
-          json.loads(hm_out.read_text()) == record.meta)
+          json.loads(hm_out.read_text(encoding="utf-8")) == record.meta)
 
     # --- zinc index: Python authors, Rust consumes (T1) ---------------------
     policy = zinc.ZincPolicy.seeded(record)
@@ -134,7 +136,7 @@ def run_case(d, name, wav, expect_codec):
     recon_bin = d / f"{name}_recon.bin"
     rust("index", str(zinc_bee), "--out", str(keys_json),
          "--reconstruct-out", str(recon_bin))
-    rk = json.loads(keys_json.read_text())
+    rk = json.loads(keys_json.read_text(encoding="utf-8"))
     check(f"{name}: Rust reads the authored keys",
           rk["n_keys"] == len(stored)
           and [(k["frame"], k["a"], k["i"]) for k in rk["keys"]]
@@ -153,7 +155,7 @@ def run_case(d, name, wav, expect_codec):
     am_in = {k: am[k] for k in
              ("sample_rate", "channels", "subtype", "frames", "dtype",
               "byte_order", "source_format")}
-    (d / f"{name}_am.json").write_text(json.dumps(am_in))
+    (d / f"{name}_am.json").write_text(json.dumps(am_in), encoding="utf-8")
     arrays_bytes, meta_bytes = beefile._serialize_sidechannel(record)
     (d / f"{name}_h.npz").write_bytes(arrays_bytes)
     (d / f"{name}_hm.json").write_bytes(meta_bytes)
