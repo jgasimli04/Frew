@@ -3,21 +3,21 @@
 Three additions on top of the merge below (all committed, nothing pushed;
 app reinstalled at `~/Applications/BeeDeck.app`):
 
-- **Single-window workspace UI** (`6434eaf`). The three ad-hoc windows are
+- **Single-window workspace UI** (`20443da`). The three ad-hoc windows are
   now one Logic-style workspace: toolbar switcher **Perform** (decks, mixer,
   FX) / **Analyze** (helix scene, inspector, library rail), plus a global
   bottom status rail (engine state, Δbeat, encoder status). The **Stage** is
   still its own window on purpose — it's the output surface, meant for a
   projector/second display (toolbar button opens it). Design tokens live in
   `BeehiveMac/Sources/BeehiveApp/Theme.swift`; new chrome should use them.
-- **T10 neural video trace** (`9ae8724`). Vision contours on the playing
+- **T10 neural video trace** (`7663ac2`). Vision contours on the playing
   clip (OS schedules onto ANE/GPU), five scale strata mapped to the five EQ
   buses (biggest shapes → sub, finest → hi), re-traced once per θ
   quarter-bar beat, band levels animate the strokes between beats. Measured:
   `beehive-cli --tracetest` → 46 contours, median 2.8 ms, worst 26.8 ms per
   512² trace (a 174 bpm beat is 345 ms). The fuller ask — whole clip decoded
   offline into a helix-plane record — is OPEN in roadmap T10.
-- **Choose Clips fixed + denser stage overlay** (`44fc959`). The picker was
+- **Choose Clips fixed + denser stage overlay** (`a01a903`). The picker was
   a flat directory-only scan that failed silently; now files-or-folders,
   recursive, with visible feedback. Overlay gained beat shockwave rings,
   a 48-tick spectrum ring, a rotating hexagon frame, sub-band video zoom.
@@ -28,14 +28,14 @@ app reinstalled at `~/Applications/BeeDeck.app`):
 
 ## State of the world (read first)
 
-- **One branch, one tree: `main` at merge commit `7f0dabf`.** The previous
+- **One branch, one tree: `main` at merge commit `a6f415e`.** The previous
   handoff's open thread #1 is done: `worktree-beedeck` (decks, isolator
   mixer, ten beat FX, library/USB, CBeeDeck C core) is merged into `main`.
   The worktree checkout and the local branch are deleted;
   `origin/worktree-beedeck` still exists remotely but its commits are all
   in `main`'s history. **Nothing has been pushed.**
 - **BeeDeck is an app, not a terminal program.** Installed at
-  `~/Applications/BeeDeck.app`, built from `7f0dabf`, so the installed app
+  `~/Applications/BeeDeck.app`, built from `a6f415e`, so the installed app
   now carries everything: helix scene + breathe, AV stage, two decks,
   isolator mixer, the ten θ-synced FX, library with background `.bee`
   auto-convert, Prepare→USB export. Launch from Finder/Spotlight or:
@@ -116,7 +116,7 @@ native-decode verification) has **not** been run yet.
 | T8 polish (key detect, MIDI, 4-deck) | not started |
 | T9 cross-track auto-mix ("Audio Swap") | not started (spec in roadmap) |
 
-## Verify everything (all green at `7f0dabf`, 2026-07-11)
+## Verify everything (all green at `a6f415e`, 2026-07-11)
 
 ```sh
 .venv/bin/python -m pytest tests/ -q                 # 25/25
@@ -137,7 +137,7 @@ packaging, `.gitignore`); `worktree-beedeck`'s deck work taken whole
 hand-blends where both sides carried real features: `StageView.swift` (deck
 live source + fractional interpolation), `main.swift` (deck window wiring +
 breathe path), `AppModel.swift` (CADisplayLink pacing kept over the 30 Hz
-timer), `BEEDECK_ROADMAP.md` (union of statuses). Full detail in `7f0dabf`'s
+timer), `BEEDECK_ROADMAP.md` (union of statuses). Full detail in `a6f415e`'s
 commit message.
 
 ## Open threads (next session)
@@ -158,7 +158,7 @@ commit message.
 
 *(Superseded by the merge above: the "not in the installed app" caveat and
 open thread #1 no longer apply; zinc files listed as uncommitted are
-committed as of `68f5398`/`1ac93cc`.)*
+committed as of `5e4ddf2`/`7f2702f`.)*
 
 ## State of the world (read first)
 
@@ -167,7 +167,7 @@ committed as of `68f5398`/`1ac93cc`.)*
   `~/Applications/BeeDeck.app` is now a **main** build (0.2.0, ad-hoc signed).
 - **Not in the installed app**: the T3–T5 deck work — DecksView, the CBeeDeck
   C isolator, the ten θ-synced beat FX. All of that lives only on
-  `worktree-beedeck` (`dceabdd`, 4 commits ahead of main's base; checkout at
+  `worktree-beedeck` (`9a4cfd5`, 4 commits ahead of main's base; checkout at
   `.claude/worktrees/beedeck`, locked). The installed app is the
   helix/stage/library app until that branch is merged into main → **open
   thread #1**.
@@ -242,7 +242,7 @@ too strong/subtle.
 
 # Previous handoff — 2026-07-10 · BeeDeck beat FX (T5 first wave)
 
-## What shipped (branch `worktree-beedeck`, commits `adb7b83` + `88d40e8`)
+## What shipped (branch `worktree-beedeck`, commits `7a7d08a` + `b66987b`)
 
 θ-synced Beat FX are in BeeDeck — designed from the **RMX-IGNITE manual**
 (`RMX-IGNITE_DRI2033-A_EN_manual.pdf`, behavior reference only) and
@@ -268,7 +268,7 @@ so DUCK, ROLL and REVERSE needed zero new timing code.
   duck −33.3 dB on-beat / −0.00 dB off-beat; release decay monotonic
   −12.5 dB per 3 taps; prior T3/T4 suite unchanged; 97× realtime.
 
-## Second wave (same session, commit `88d40e8`)
+## Second wave (same session, commit `b66987b`)
 
 The catalog is complete: **SWEEP, FLANGER, PHASER, SLICER, REVERB** joined
 the first five — ten effects total, all θ-synced, all measured (decktest
