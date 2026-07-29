@@ -1,4 +1,4 @@
-# sonoFaig — the `.bee` audio format & BeeDeck
+# son'o'Faig {gasmly} — the `.bee` audio format & BeeDeck
 
 A song as a **3D helix**: rotation set by tempo (one full turn = one bar),
 climb set by how fast the music moves. `.bee` is the two-layer file format
@@ -7,10 +7,11 @@ helix analysis state riding alongside (Layer 2) and a variable-rate keyframe
 index (`zinc_index`) on top. BeeDeck is the macOS DJ + visuals app built on
 that math.
 
-**→ [`docs/PROVENANCE.md`](docs/PROVENANCE.md) states precisely which
+**→ [`md/docs/PROVENANCE.md`](md/docs/PROVENANCE.md) states precisely which
 mathematics and algorithms are original to this project and which are
 conventional techniques, component by component, with file pointers.**
-Read it first if you are reviewing.
+Read it first if you are reviewing. (All project markdown lives under `md/`
+and is gitignored; only this README is tracked.)
 
 ## What runs where
 
@@ -70,17 +71,21 @@ the Mac app via AVFoundation.
 |---|---|---|---|
 | `beehive/` | **Reference implementation** — format source of truth: encoder, `.bee` reader/writer, zinc key generator, helichain, loops. `python -m beehive encode\|decode\|inspect` | Python | working, tested |
 | `beecore/` | **Portable native core** — `.bee` read/write + zinc consumer + C ABI (`bee-ffi`), `bee` CLI, benchmarks | Rust | bit-exact vs reference (interop 42/42) |
-| `BeehiveMac/` | **BeeDeck** — decks, 5-band isolator mixer, θ-synced beat FX, AV stage with neural trace; plays through the native core | Swift + C | macOS app; measured findings in `docs/findings/` |
+| `BeehiveMac/` | **BeeDeck** — decks, 5-band isolator mixer, θ-synced beat FX, AV stage with neural trace; plays through the native core | Swift + C | macOS app; measured findings in `md/docs/findings/` |
 | `kernel/` | Loop-clocked engine, Demo 1 — adaptive-time-step kernel (equal-energy ticks from `‖F‖`) | Rust | acceptance green |
 | `bearing-helix-research/` | The helix fold applied to rotating-machinery vibration | Rust | synthetic bench green; real data open |
 | `helichain/` | Data — append-only, hash-linked ledger of encoded songs | data | 3 tracks |
 | `tests/` | pytest suite for `beehive/` | Python | 25 tests |
 | `scripts/` | Corpus tools (`convert_to_bee.py`, `zinc_report.py`, `encode_song.py`) — point them at your own music folder | Python | — |
-| `experiments/` | One-off studies (their measured conclusions live in `docs/findings/`) | Python | historical record |
-| `docs/` | Blueprints (specs/roadmaps), findings (measured results), **PROVENANCE.md** | — | — |
+| `experiments/` | One-off studies (their measured conclusions live in `md/docs/findings/`) | Python | historical record |
+| `md/docs/` | Blueprints (specs/roadmaps), findings (measured results), **PROVENANCE.md** (local, gitignored) | — | — |
 
-## docs/
+## md/docs/ (local, gitignored)
 
+- **`SYSTEM_LOGIC.md`** — the connective tissue: the one geometric substitution
+  everything else follows from, the derivable-vs-stored rule, the layer split,
+  the authoring direction, and a checklist for pointing the same logic at a new
+  domain. Start here if you want to build on the system rather than review it.
 - **`PROVENANCE.md`** — original math vs. conventional techniques, per component.
 - `blueprints/` — build specs & roadmaps: **BEE_FORMAT_BLUEPRINT.md** (the
   format; §4 lists what is still OPEN), **BEEDECK_ROADMAP.md** (the app,
@@ -91,7 +96,7 @@ the Mac app via AVFoundation.
   isolator, FX measurements), LOOP_DEDUP_FINDINGS.md.
 - `guides/` — USER_MANUAL.md. `notes/`, `figures/`, `archive/` — the record.
 
-Benchmarks of `.bee` vs FLAC/ALAC/WAV/AIFF: `beecore/bench/RESULTS.md`
+Benchmarks of `.bee` vs FLAC/ALAC/WAV/AIFF: `md/beecore/bench/RESULTS.md`
 (honest result: `.bee` does not beat FLAC on size; that axis is closed there).
 
 ## Quick commands (macOS dev box)
@@ -109,5 +114,5 @@ BeehiveMac/scripts/make_app.sh --install             # build + install BeeDeck.a
 Blueprint §4: **(a)** the real predictive+entropy payload coder (v0 uses
 FLAC/raw+zlib placeholders), **(b)** exact vs near-duplicate loop dedup, and
 the inherited theory frontier (radius law, `‖F‖` weighting, beehive packing) —
-see `docs/blueprints/BEE_FORMAT_BLUEPRINT.md` §4 and `BEEDECK_ROADMAP.md` for
+see `md/docs/blueprints/BEE_FORMAT_BLUEPRINT.md` §4 and `BEEDECK_ROADMAP.md` for
 the app-side OPEN items (T6 cold-load DoD, T7, T9, T10's offline extension).
