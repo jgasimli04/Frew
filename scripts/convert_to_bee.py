@@ -28,6 +28,7 @@ from beehive import beefile
 from beehive.encode import encode_song
 from beehive.helichain import Helichain
 from beehive.record import HelixRecord
+from beehive.zinc import ZincPolicy, place_anchors
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 BEE_BIN = REPO / "beecore" / "target" / "release" / "bee"
@@ -93,7 +94,12 @@ def main():
         truth = sha(data.tobytes())
         record, provenance = record_for(src, bpm=args.bpm)
 
-        manifest = beefile.write_bee(bee_path, audio_path=str(src), record=record)
+        policy = ZincPolicy.seeded(record)
+        anchors = place_anchors(record, policy)
+
+        manifest = beefile.write_bee(bee_path, audio_path=str(src),
+                                     record=record, anchors=anchors,
+                                     zinc_policy=policy)
         ok, why = verify_native(bee_path, truth)
         if not ok:
             failures += 1

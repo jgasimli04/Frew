@@ -1,8 +1,12 @@
 import Foundation
 
 /// Tempo estimate: spectral-flux onset envelope + autocorrelation -> bpm.
-/// Port of beehive/tempo.py. Known to lock onto half/double the true tempo;
-/// the engine accepts a bpm override.
+/// Port of beehive/tempo.py, extended with octave correction: raw integer-lag
+/// argmax can lock onto a multiple of the true period (half/double tempo),
+/// especially when the beat period falls between frames and its peak smears.
+/// The winning lag is therefore verified with a fractional-period comb — a
+/// shorter period whose teeth capture strictly more onset energy wins — and
+/// refined to sub-frame precision from the envelope's drift pattern.
 public enum Tempo {
 
     /// Half-wave-rectified spectral flux, one value per frame.
@@ -21,6 +25,23 @@ public enum Tempo {
         }
         let mean = env.reduce(0, +) / Double(nFrames)
         return env.map { $0 - mean }
+    }
+
+    /// Total rectified onset energy captured by a comb with fractional period
+    /// `p` frames: teeth at k·p, each tooth taking the max within ±1 frame
+    /// (absorbs the integer-frame quantization of the onset times).
+    private static func combScore(_ p: Double, _ env: [Double]) -> Double {
+        var s = 0.0
+        var k = 1
+        while true {
+            let c = Int((Double(k) * p).rounded())
+            if c >= env.count { break }
+            var m = 0.0
+            for i in max(0, c - 1)...min(env.count - 1, c + 1) { m = max(m, max(env[i], 0)) }
+            s += m
+            k += 1
+        }
+        return s
     }
 
     /// (bpm, confidence). confidence is the autocorr height at the chosen lag.
@@ -45,8 +66,40 @@ public enum Tempo {
 
         var best = lagMin
         for lag in lagMin...lagMax where ac[lag] > ac[best] { best = lag }
-        let bpm = 60.0 * fps / Double(best)
         let conf = ac[best] / ((ac.max() ?? 1) + 1e-10)
+
+        // Octave correction: the autocorr peak at `best` may be a multiple of
+        // the fundamental period (a pulse train is periodic at 2×, 3×, … its
+        // period). A shorter candidate only wins if its comb captures clearly
+        // more onset energy (>5%) — so real music's weaker off-beat energy
+        // does not falsely double the tempo.
+        var period = Double(best)
+        var base = combScore(period, env)
+        var improved = true
+        while improved {
+            improved = false
+            for d in [2.0, 3.0] {
+                let cand = period / d
+                guard cand >= Double(lagMin) else { continue }
+                let score = combScore(cand, env)
+                if score > base * 1.05 { period = cand; base = score; improved = true }
+            }
+        }
+
+        // Sub-frame refinement: scan ±0.6 frames so a beat period of e.g.
+        // 21.5 frames lands exactly instead of quantizing to the nearest lag.
+        var refined = period
+        var bestScore = base
+        var p = period - 0.6
+        while p <= period + 0.6 {
+            if p >= Double(lagMin) {
+                let score = combScore(p, env)
+                if score > bestScore { refined = p; bestScore = score }
+            }
+            p += 0.05
+        }
+
+        let bpm = 60.0 * fps / refined
         return (bpm, conf)
     }
 }

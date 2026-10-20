@@ -10,11 +10,13 @@ import SwiftUI
 enum Workspace: String, CaseIterable {
     case perform = "Perform"
     case analyze = "Analyze"
+    case edit = "Edit"
 
     var symbol: String {
         switch self {
         case .perform: return "circle.grid.2x1"
         case .analyze: return "waveform.and.magnifyingglass"
+        case .edit: return "bolt.fill"
         }
     }
 }
@@ -34,6 +36,7 @@ struct WorkspaceView: View {
             switch workspace {
             case .perform: DecksView()
             case .analyze: AnalyzeView2Pane()
+            case .edit: BeatSyncView()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -47,8 +50,8 @@ struct WorkspaceView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 240)
-                .help("Workspace — Perform: decks, mixer, FX · Analyze: the helix record")
+                .frame(width: 320)
+                .help("Workspace — Perform: decks, mixer, FX · Analyze: the helix record · Edit: beat-sync generator")
             }
             ToolbarItem(placement: .automatic) {
                 Button {

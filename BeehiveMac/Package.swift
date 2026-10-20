@@ -25,9 +25,14 @@ let package = Package(
         // from the AVAudioSourceNode render block — realtime stays off the
         // Swift runtime per the transition blueprint §2.
         .target(name: "CBeeDeck"),
+        // Measurement harness plumbing (test infrastructure, deliberately not
+        // part of CBeeDeck): lock-free SPSC capture ring, stimulus table
+        // player, and mSampleTime xrun detection. See docs/measurements/.
+        .target(name: "CBeeMeasure"),
         .target(name: "BeehiveKit", dependencies: ["CBee", "CBeeDeck"]),
         .executableTarget(name: "BeehiveApp", dependencies: ["BeehiveKit"]),
-        .executableTarget(name: "beehive-cli", dependencies: ["BeehiveKit", "CBeeDeck"]),
+        .executableTarget(name: "beehive-cli",
+                          dependencies: ["BeehiveKit", "CBeeDeck", "CBeeMeasure"]),
         // NOTE: Tests/BeehiveKitTests (XCTest) runs under Xcode. Command Line
         // Tools has no XCTest, so the same checks also run via `beehive-cli --selftest`.
     ]
