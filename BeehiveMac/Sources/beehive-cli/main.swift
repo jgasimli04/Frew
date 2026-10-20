@@ -58,6 +58,21 @@ func selftest() {
 if CommandLine.arguments.contains("--selftest") { selftest(); exit(0) }
 if CommandLine.arguments.contains("--decktest") { decktest() }
 if CommandLine.arguments.contains("--tracetest") { tracetest() }
+if CommandLine.arguments.contains("--beatsynctest") { beatsynctest() }
+// Measurement harness (docs/measurements/README.md). The self-test verifies the
+// analysis against synthetic input and measures nothing; the other two need a
+// physical loopback cable and a same-device clock.
+if CommandLine.arguments.contains("--measure-selftest") { measureSelftest(); exit(0) }
+if CommandLine.arguments.contains("--measure-latency") {
+    measureLatency(Array(CommandLine.arguments.dropFirst())); exit(0)
+}
+if CommandLine.arguments.contains("--measure-ir") {
+    measureIR(Array(CommandLine.arguments.dropFirst())); exit(0)
+}
+// Beat-sync real media: `beehive-cli beatsync <audio> <clips-dir> <out.mp4> [bpm] [beatsPerCut]`
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "beatsync" {
+    beatsyncRun(Array(CommandLine.arguments.dropFirst(2)))
+}
 if let i = CommandLine.arguments.firstIndex(of: "--deckload"),
    CommandLine.arguments.count > i + 1 { deckload(CommandLine.arguments[i + 1]) }
 
